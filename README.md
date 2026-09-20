@@ -1,6 +1,6 @@
 # Roku Remote for Omarchy
 
-<p align="center"><img src="docs/screenshot.png" width="260" alt="The Roku remote window: dark rounded body, circular D-pad with OK, media and volume buttons, and coloured app shortcuts"></p>
+<p align="center"><img src="docs/screenshot.png" width="260" alt="The Roku remote window with the TV list open: dark rounded body, circular D-pad with OK, media and volume buttons, and coloured app shortcuts"></p>
 
 A Roku remote that looks like a real one, as a floating window for [Omarchy](https://omarchy.org)
 (Hyprland + Quickshell). Keyboard- and mouse-driven, talks straight to your TV over your local network.
