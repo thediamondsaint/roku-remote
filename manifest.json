@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "charles.roku-remote",
+  "name": "Roku remote",
+  "version": "1.0.0",
+  "author": "charles",
+  "description": "A Roku remote that looks like the real thing: floating, keyboard- and mouse-driven, talks to your TV over the local network",
+  "kinds": [
+    "overlay"
+  ],
+  "entryPoints": {
+    "overlay": "Remote.qml"
+  }
+}

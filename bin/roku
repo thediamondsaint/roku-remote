@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Control Roku devices over the local network (ECP, port 8060).
+
+  roku list                     find Rokus on the LAN (cached)
+  roku [-d NAME] KEY...         send keys: home up down left right select back play
+                                rev fwd volup voldown mute power info replay ...
+  roku [-d NAME] type "text"    type text into an on-screen keyboard
+  roku [-d NAME] apps           list installed apps
+  roku [-d NAME] launch APP     launch an app by (partial) name or id (`roku netflix` works too)
+  roku [-d NAME] status         power state / active app
+  roku [-d NAME] info           JSON: device, power, active app, apps (used by the GUI)
+  roku default NAME             remember the default device
+
+Repeat a key with KEY*N, e.g. `roku down*5 select`.
+NAME is a case-insensitive substring of the device name, or an IP address.
+"""
+import concurrent.futures as cf
+import ipaddress
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+
+CACHE = os.path.expanduser("~/.cache/roku.json")
+PORT = 8060
+
+ALIASES = {
+    "volup": "VolumeUp", "voldown": "VolumeDown", "mute": "VolumeMute",
+    "power": "Power", "poweroff": "PowerOff", "poweron": "PowerOn",
+    "ok": "Select", "enter": "Select", "esc": "Back", "pause": "Play",
+    "ff": "Fwd", "rw": "Rev", "input": "InputHDMI1",
+}
+KEYS = ["Home", "Rev", "Fwd", "Play", "Select", "Left", "Right", "Down", "Up",
+        "Back", "InstantReplay", "Info", "Backspace", "Search", "Enter",
+        "VolumeDown", "VolumeMute", "VolumeUp", "PowerOff", "PowerOn", "Power",
+        "ChannelUp", "ChannelDown", "InputTuner", "InputHDMI1", "InputHDMI2",
+        "InputHDMI3", "InputHDMI4", "InputAV1", "FindRemote"]
+KEYMAP = {k.lower(): k for k in KEYS}
+KEYMAP["replay"] = "InstantReplay"
+
+
+def load():
+    try:
+        with open(CACHE) as f:
+            return json.load(f)
+    except Exception:
+        return {"default": None, "devices": {}}
+
+
+def save(c):
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+    with open(CACHE, "w") as f:
+        json.dump(c, f, indent=2)
+
+
+def local_net():
+    """The /24 (or smaller) network of the interface that carries the default route."""
+    def run(*a):
+        return subprocess.run(a, capture_output=True, text=True).stdout
+    m = re.search(r"default via \S+ dev (\S+)", run("ip", "-4", "route", "show", "default"))
+    args = ["ip", "-4", "-o", "addr", "show", "scope", "global"] + (["dev", m.group(1)] if m else [])
+    for a in re.finditer(r"inet (\d+\.\d+\.\d+\.\d+/\d+)", run(*args)):
+        iface = ipaddress.ip_interface(a.group(1))
+        net = iface.network
+        if net.prefixlen < 24:  # never sweep a huge network; scan our own /24
+            net = ipaddress.ip_network(f"{iface.ip}/24", strict=False)
+        return net
+    sys.exit("roku: no local network found")
+
+
+def probe(ip):
+    s = socket.socket()
+    s.settimeout(0.6)
+    try:
+        s.connect((str(ip), PORT))
+    except OSError:
+        return None
+    finally:
+        s.close()
+    try:
+        x = urllib.request.urlopen(f"http://{ip}:{PORT}/query/device-info", timeout=2).read()
+        root = ET.fromstring(x)
+        g = lambda t: (root.findtext(t) or "").strip()
+        return str(ip), g("user-device-name") or g("friendly-device-name") or g("model-name")
+    except Exception:
+        return None
+
+
+def discover():
+    hosts = list(local_net().hosts())
+    with cf.ThreadPoolExecutor(128) as ex:
+        found = {ip: name for r in ex.map(probe, hosts) if r for ip, name in [r]}
+    c = load()
+    c["devices"] = found
+    if c.get("default") not in found:
+        c["default"] = None
+    save(c)
+    return c
+
+
+def resolve(name, pick_first=False):
+    c = load()
+    if not c["devices"]:
+        c = discover()
+    name = name or c.get("default")
+    devs = c["devices"]
+    if not name:
+        if not devs:
+            sys.exit("roku: no Roku found on the local network (is it on, and on the same subnet?)")
+        if len(devs) == 1 or pick_first:
+            return next(iter(devs))
+        sys.exit("roku: several devices found; pick one with -d NAME or `roku default NAME`\n"
+                 + "\n".join(f"  {ip}  {n}" for ip, n in devs.items()))
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", name):
+        return name
+    hits = [ip for ip, n in devs.items() if name.lower() in n.lower()]
+    if not hits:  # cache may be stale
+        devs = discover()["devices"]
+        hits = [ip for ip, n in devs.items() if name.lower() in n.lower()]
+    if len(hits) != 1:
+        sys.exit(f"roku: {'no' if not hits else 'multiple'} device matches {name!r}")
+    return hits[0]
+
+
+def post(ip, path):
+    req = urllib.request.Request(f"http://{ip}:{PORT}{path}", data=b"", method="POST")
+    urllib.request.urlopen(req, timeout=3).read()
+
+
+def get(ip, path):
+    return ET.fromstring(urllib.request.urlopen(f"http://{ip}:{PORT}{path}", timeout=3).read())
+
+
+def apps(ip):
+    return [(a.get("id"), a.text) for a in get(ip, "/query/apps").iter("app")]
+
+
+def main(argv):
+    dev = None
+    if argv[:1] in (["-d"], ["--device"]) and len(argv) > 2:
+        dev, argv = argv[1], argv[2:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+
+    cmd, rest = argv[0].lower(), argv[1:]
+
+    if cmd in ("list", "discover"):
+        c = discover()
+        for ip, n in c["devices"].items():
+            print(f"{'*' if c.get('default') == ip else ' '} {ip:15}  {n}")
+        return
+    if cmd == "default":
+        ip = resolve(rest[0] if rest else sys.exit("roku default NAME"))
+        c = load()
+        c["default"] = ip
+        save(c)
+        print(f"default: {ip}  {c['devices'].get(ip, '')}")
+        return
+
+    ip = resolve(dev, pick_first=(cmd == "info"))
+
+    if cmd == "type":
+        for ch in " ".join(rest):
+            post(ip, "/keypress/Lit_" + urllib.parse.quote(ch, safe=""))
+            time.sleep(0.05)
+    elif cmd == "apps":
+        for i, n in apps(ip):
+            print(f"{i:>8}  {n}")
+    elif cmd == "launch":
+        q = " ".join(rest).lower()
+        al = apps(ip)
+        hits = [a for a in al if q == a[0] or q in (a[1] or "").lower()]
+        exact = [a for a in hits if q == (a[1] or "").lower() or q == a[0]]
+        hits = exact or hits
+        if len(hits) != 1:
+            sys.exit(f"roku: {len(hits)} apps match {q!r}" + "".join(f"\n  {i} {n}" for i, n in hits))
+        post(ip, f"/launch/{hits[0][0]}")
+        print(f"launched {hits[0][1]}")
+    elif cmd == "info":
+        c = load()
+        d = get(ip, "/query/device-info")
+        a = get(ip, "/query/active-app").find("app")
+        try:
+            al = [{"id": i, "name": n} for i, n in apps(ip)]
+            limited = False
+        except urllib.error.HTTPError as e:
+            al, limited = [], e.code == 403
+        print(json.dumps({
+            "ip": ip,
+            "name": d.findtext("user-device-name") or d.findtext("friendly-device-name"),
+            "power": d.findtext("power-mode"),
+            "app": a.text if a is not None else "",
+            "apps": al,
+            "limited": limited,
+            "default": c.get("default"),
+            "devices": [{"ip": i, "name": n} for i, n in c["devices"].items()],
+        }))
+    elif cmd == "status":
+        d = get(ip, "/query/device-info")
+        a = get(ip, "/query/active-app").find("app")
+        print(f"{d.findtext('user-device-name') or d.findtext('friendly-device-name')} "
+              f"({ip}): {d.findtext('power-mode')}, app: {a.text if a is not None else '-'}")
+    else:
+        def keyname(tok):
+            k = re.fullmatch(r"(.+?)(?:\*\d+)?", tok).group(1).lower()
+            return KEYMAP.get(ALIASES.get(k, k).lower())
+        if not all(keyname(t) for t in argv):  # not keys: treat as an app name
+            return main((["-d", dev] if dev else []) + ["launch"] + argv)
+        for tok in argv:
+            m = re.fullmatch(r"(.+?)(?:\*(\d+))?", tok)
+            k = m.group(1).lower()
+            k = KEYMAP.get(ALIASES.get(k, k).lower())
+            if not k:
+                sys.exit(f"roku: unknown key or command {tok!r} (see `roku --help`)")
+            for _ in range(int(m.group(2) or 1)):
+                post(ip, f"/keypress/{k}")
+                time.sleep(0.08)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            sys.exit("roku: the TV refused the command (Limited mode). On the TV: Settings > System > "
+                     "Advanced system settings > Control by mobile apps > Network access > Permissive")
+        sys.exit(f"roku: {e}")
+    except (urllib.error.URLError, OSError) as e:
+        sys.exit(f"roku: {e}")
