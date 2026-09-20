@@ -16,6 +16,9 @@ Item {
 
   property bool opened: false
   property bool typing: false
+  property bool pickerOpen: false
+  property int pickerIndex: 0
+  property string defaultIp: ""
   property string typed: ""
   property bool limited: false
   property bool unreachable: false
@@ -46,12 +49,20 @@ Item {
   readonly property var pinned: ["netflix", "youtube", "prime video", "hulu", "disney+", "disney plus",
                                  "max", "plex", "spotify", "apple tv", "peacock", "paramount+"]
 
+  // Status dot: red = unreachable, amber = TV ignores buttons (Limited mode), green = on, grey = standby.
+  readonly property color statusColor: unreachable ? "#ff5f5f" : limited ? "#f0a030"
+                                     : power === "PowerOn" ? "#3ddc84" : "#77777f"
+  readonly property string statusNote: unreachable ? "Can't reach this TV (is it on, and on the same network?)"
+    : limited ? "Limited mode: this TV ignores button presses. On the TV: Settings › System › Advanced system settings › Control by mobile apps › Network access › Permissive."
+    : ""
+
   function glyph(cp) { return String.fromCodePoint(cp) }
 
   // ---- lifecycle -----------------------------------------------------------
   function open(payloadJson) {
     root.opened = true
     root.typing = false
+    root.pickerOpen = false
     root.typed = ""
     root.notice = ""
     root.refresh()
@@ -98,8 +109,32 @@ Item {
     root.activeApp = d.app || ""
     root.limited = d.limited === true
     root.devices = d.devices || []
+    root.defaultIp = d.default || ""
     var listed = d.apps && d.apps.length > 0
     root.apps = root.sortApps(listed ? d.apps : root.fallbackApps)
+  }
+
+  function togglePicker() {
+    if (root.pickerOpen) { root.pickerOpen = false; return }
+    var idx = 0
+    for (var i = 0; i < root.devices.length; i++)
+      if (root.devices[i].ip === root.ip) idx = i
+    root.pickerIndex = idx
+    root.pickerOpen = true
+  }
+
+  function selectDevice(ip) {
+    root.pickerOpen = false
+    if (!ip || ip === root.ip) return
+    for (var i = 0; i < root.devices.length; i++)
+      if (root.devices[i].ip === ip) root.deviceName = root.devices[i].name
+    root.ip = ip
+    root.apps = []
+    root.limited = false
+    root.unreachable = false
+    root.power = ""
+    root.activeApp = ""
+    root.refresh()
   }
 
   function cycleDevice() {
@@ -166,7 +201,21 @@ Item {
       return true
     }
 
+    if (root.pickerOpen) {
+      var n = root.devices.length
+      if (k === Qt.Key_Escape || t === "d") { root.pickerOpen = false; return true }
+      if (k === Qt.Key_Down || k === Qt.Key_Tab || t === "j") { if (n) root.pickerIndex = (root.pickerIndex + 1) % n; return true }
+      if (k === Qt.Key_Up || t === "k") { if (n) root.pickerIndex = (root.pickerIndex - 1 + n) % n; return true }
+      if (k === Qt.Key_Return || k === Qt.Key_Enter) {
+        if (n) root.selectDevice(root.devices[root.pickerIndex].ip); else root.pickerOpen = false
+        return true
+      }
+      if (t >= "1" && t <= "9") { if (Number(t) <= n) root.selectDevice(root.devices[Number(t) - 1].ip); return true }
+      return true
+    }
+
     if (k === Qt.Key_Escape) { root.dismiss(); return true }
+    if (t === "d") { root.togglePicker(); return true }
     if (k === Qt.Key_Tab) { if (!rep) root.cycleDevice(); return true }
     if (k === Qt.Key_Up || t === "k") { root.press("Up"); return true }
     if (k === Qt.Key_Down || t === "j") { root.press("Down"); return true }
@@ -390,6 +439,104 @@ Item {
 
       MouseArea { anchors.fill: parent; onClicked: keyCatcher.forceActiveFocus() }
 
+      // Click anywhere else to dismiss the TV list
+      MouseArea {
+        z: 9
+        anchors.fill: parent
+        visible: root.pickerOpen
+        onClicked: { root.pickerOpen = false; keyCatcher.forceActiveFocus() }
+      }
+
+      // TV list (drop-down)
+      Rectangle {
+        id: picker
+        z: 10
+        visible: root.pickerOpen
+        x: root.pad
+        y: content.y + statusArea.y + statusArea.height + Style.space(2)
+        width: root.colW
+        height: pickerList.implicitHeight + Style.space(12)
+        radius: Style.space(16)
+        color: "#1f1f24"
+        border.width: 1
+        border.color: "#3a3a42"
+
+        Column {
+          id: pickerList
+          x: Style.space(6)
+          y: Style.space(6)
+          width: parent.width - Style.space(12)
+          spacing: Style.space(2)
+
+          Text {
+            visible: root.devices.length === 0
+            width: parent.width
+            padding: Style.space(10)
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            text: "No Rokus found. Run `roku list` in a terminal to rescan."
+            color: root.glyphColor
+            opacity: 0.7
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: root.devices
+            delegate: Rectangle {
+              id: devRow
+              required property int index
+              required property var modelData
+              readonly property bool isCurrent: modelData.ip === root.ip
+              width: pickerList.width
+              height: Style.space(40)
+              radius: Style.space(11)
+              color: dm.containsMouse || root.pickerIndex === index ? "#3a3a42"
+                   : isCurrent ? "#2a2a31" : "transparent"
+
+              Text {
+                x: Style.space(12)
+                y: Style.space(5)
+                width: parent.width - Style.space(48)
+                text: devRow.modelData.name
+                color: root.glyphColor
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                font.bold: devRow.isCurrent
+                elide: Text.ElideRight
+              }
+              Text {
+                x: Style.space(12)
+                y: Style.space(21)
+                text: devRow.modelData.ip + (devRow.modelData.ip === root.defaultIp ? "  ·  default" : "")
+                color: root.glyphColor
+                opacity: 0.45
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption - 1
+              }
+              Text {
+                visible: devRow.isCurrent
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.glyph(0xF012C)
+                color: root.rokuPurple
+                font.family: Style.font.family
+                font.pixelSize: Style.font.icon
+              }
+              MouseArea {
+                id: dm
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: root.pickerIndex = devRow.index
+                onClicked: { root.selectDevice(devRow.modelData.ip); keyCatcher.forceActiveFocus() }
+              }
+            }
+          }
+        }
+      }
+
       Item {
         id: keyCatcher
         anchors.fill: parent
@@ -441,35 +588,58 @@ Item {
           }
         }
 
-        // Status: which TV, what's playing / typing field / problems
+        // Status: which TV (click to open the TV list), what's playing, or the typing field
         Item {
+          id: statusArea
           width: parent.width
           height: Style.space(34)
 
           Column {
-            visible: !root.typing && !(root.limited || root.unreachable)
+            visible: !root.typing
             anchors.centerIn: parent
             spacing: Style.space(2)
-            Row {
+
+            Item {
+              id: nameRow
               anchors.horizontalCenter: parent.horizontalCenter
-              spacing: Style.space(7)
-              Rectangle {
-                width: Style.space(8); height: width; radius: width / 2
-                anchors.verticalCenter: parent.verticalCenter
-                color: root.power === "PowerOn" ? "#3ddc84" : "#77777f"
-              }
-              Text {
-                text: root.deviceName || "Looking for Roku…"
-                color: root.glyphColor
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: root.devices.length > 1 ? Qt.PointingHandCursor : Qt.ArrowCursor
-                  onClicked: { root.cycleDevice(); keyCatcher.forceActiveFocus() }
+              width: nameRowInner.implicitWidth
+              height: nameRowInner.implicitHeight
+              Row {
+                id: nameRowInner
+                spacing: Style.space(7)
+                Rectangle {
+                  width: Style.space(8); height: width; radius: width / 2
+                  anchors.verticalCenter: parent.verticalCenter
+                  color: root.statusColor
+                }
+                Text {
+                  text: root.deviceName || "Looking for Roku…"
+                  color: root.glyphColor
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+                Text {
+                  visible: root.devices.length > 1
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.glyph(0xF0140)
+                  color: root.glyphColor
+                  opacity: 0.6
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
                 }
               }
+              MouseArea {
+                id: nameMa
+                anchors.fill: parent
+                anchors.margins: -Style.space(6)
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { root.togglePicker(); keyCatcher.forceActiveFocus() }
+              }
+              ToolTip.visible: nameMa.containsMouse && !root.pickerOpen
+              ToolTip.text: root.statusNote !== "" ? root.statusNote : (root.devices.length > 1 ? "Switch TV (d)" : "")
+              ToolTip.delay: 400
             }
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
@@ -494,29 +664,6 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Style.font.body
             elide: Text.ElideLeft
-          }
-        }
-
-        // Problem banner (Limited mode / unreachable)
-        Rectangle {
-          visible: root.limited || root.unreachable
-          width: parent.width
-          height: visible ? bannerText.implicitHeight + Style.space(12) : 0
-          radius: Style.space(10)
-          color: Util.alpha(Color.urgent, 0.16)
-          border.width: 1
-          border.color: Color.urgent
-          Text {
-            id: bannerText
-            x: Style.space(8); y: Style.space(6)
-            width: parent.width - Style.space(16)
-            wrapMode: Text.WordWrap
-            color: root.glyphColor
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            text: root.unreachable
-              ? "Can't reach this Roku. Is it on, and on the same network?"
-              : "TV is in Limited mode and ignores buttons. On the TV: Settings › System › Advanced system settings › Control by mobile apps › Network access › Permissive."
           }
         }
 
@@ -605,7 +752,7 @@ Item {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
           wrapMode: Text.WordWrap
-          text: root.notice ? root.notice : "hjkl · ⏎ · ⌫ back · g home · t type · 1-8 apps · esc"
+          text: root.notice ? root.notice : "hjkl · ⏎ · ⌫ back · g home · t type · d TVs · 1-8 apps · esc"
           color: root.glyphColor
           opacity: root.notice ? 0.9 : 0.35
           font.family: Style.font.family

@@ -8,7 +8,7 @@ A Roku remote that looks like a real one, as a floating window for [Omarchy](htt
 - Round buttons, a circular D-pad with OK, media and volume rows
 - Four coloured app buttons (keys `1`-`4`; `5`-`8` also work) and a "now playing" line
 - Type into the TV's on-screen keyboard from your keyboard
-- Switch between several Rokus (Tab, or click the TV name)
+- Switch between several Rokus from a drop-down list (click the TV name, or press `d`)
 - Bundled `roku` command-line tool (`roku home`, `roku volup*3`, `roku netflix`, ...)
 
 ## Requirements
@@ -17,7 +17,7 @@ A Roku remote that looks like a real one, as a floating window for [Omarchy](htt
   (developed and tested on Hyprland 0.56 with a TCL Roku TV running Roku OS 15; other models should work but are untested)
 - A Roku on the same network, with **Settings > System > Advanced system settings > Control by
   mobile apps > Network access** set to **Permissive** (the default "Limited" mode ignores button presses;
-  the remote shows a banner if it detects this)
+  the remote shows an amber dot next to that TV's name if it detects this)
 
 ## Install
 
@@ -40,8 +40,9 @@ roku list        # finds Rokus on your network
 roku default <name>
 ```
 
-If you have several Rokus, pick yours with `roku default <name>`. The remote uses that default (Tab switches TVs
-while it's open); with no default set it starts on the first Roku it finds.
+If you have several Rokus, pick yours with `roku default <name>`. The remote uses that default (`Tab` cycles TVs
+while it's open, or click the name / press `d` for the list); it always opens on your default TV, and with no default set it starts on
+the first Roku it finds.
 
 The first time it opens, the remote scans your local /24 network for Rokus, which takes a few seconds; the result is
 cached in `~/.cache/roku.json`. Run `roku list` any time to rescan.
@@ -56,7 +57,8 @@ cached in `~/.cache/roku.json`. Run `roku list` any time to rescan.
 | `r` | Instant replay | `i` / `*` | Options |
 | `+` `-` | Volume | `m` | Mute |
 | `p` | Power | `t` or `/` | Type text (Esc stops) |
-| `1`-`8` | Launch app | `Tab` | Switch TV |
+| `1`-`8` | Launch app | `d` | TV list (arrows + Enter, or `1`-`9`) |
+| `Tab` | Next TV | | |
 | `Esc` | Close | | |
 
 ## Command line
@@ -80,8 +82,9 @@ scans your local subnet for Rokus. Colours are fixed (the Roku look), not taken 
 
 ## Troubleshooting
 
-- **"Limited mode" banner / `403 Forbidden`:** set Network access to Permissive on the TV (see above).
-- **"Can't reach this Roku":** the TV is off or on another network/VLAN.
+- **Amber dot next to the TV name / `403 Forbidden`:** that TV is in Limited mode and ignores button presses. Hover
+  the name for the fix: set Network access to Permissive on the TV (see above). You can still switch TVs.
+- **Red dot ("can't reach"):** the TV is off or on another network/VLAN.
 - **Nothing found:** run `roku list` in a terminal to rescan.
 - **After editing `Remote.qml`:** run `omarchy restart shell` (plugin QML is cached).
 
