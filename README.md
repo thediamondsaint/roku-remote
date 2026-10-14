@@ -22,7 +22,7 @@ A Roku remote that looks like a real one, as a floating window for [Omarchy](htt
 ## Install
 
 ```bash
-omarchy plugin add <git-url-of-this-repo> --enable --yes
+omarchy plugin add https://github.com/thediamondsaint/roku-remote --enable --yes
 ```
 
 (or clone this repo into `~/.config/omarchy/plugins/charles.roku-remote/`, then
@@ -45,7 +45,9 @@ while it's open, or click the name / press `d` for the list); it always opens on
 the first Roku it finds.
 
 The first time it opens, the remote scans your local /24 network for Rokus, which takes a few seconds; the result is
-cached in `~/.cache/roku.json`. Run `roku list` any time to rescan.
+cached in `~/.cache/roku.json`. Click the TV name and choose **Rescan TVs**, press `F5`, or run `roku list` to rescan.
+The remote refreshes status every five seconds while open. A scan preserves your default even if the TV is offline.
+Explicit IP addresses bypass discovery, including devices outside the scanned subnet.
 
 ## Keys
 
@@ -59,7 +61,7 @@ cached in `~/.cache/roku.json`. Run `roku list` any time to rescan.
 | `p` | Power | `t` or `/` | Type text (Esc stops) |
 | `1`-`8` | Launch app | `d` | TV list (arrows + Enter, or `1`-`9`) |
 | `Tab` | Next TV | | |
-| `Esc` | Close | | |
+| `Esc` | Close | `F5` | Rescan TVs |
 
 ## Command line
 
@@ -85,9 +87,16 @@ scans your local subnet for Rokus. Colours are fixed (the Roku look), not taken 
 - **Amber dot next to the TV name / `403 Forbidden`:** that TV is in Limited mode and ignores button presses. Hover
   the name for the fix: set Network access to Permissive on the TV (see above). You can still switch TVs.
 - **Red dot ("can't reach"):** the TV is off or on another network/VLAN.
-- **Nothing found:** run `roku list` in a terminal to rescan.
+- **Nothing found:** click the TV name and choose **Rescan TVs**, or press `F5`.
 - **After editing `Remote.qml`:** run `omarchy restart shell` (plugin QML is cached).
 
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+## Development
+
+Run `python3 -m unittest discover -s tests -v` for offline CLI regression tests and
+`node --test tests/remote.test.cjs` for the remote’s state transitions.
+Run `bash -n install.sh` to check installer syntax. Test the UI in Omarchy with a real Roku
+for power, typing, app launches, TV switching, and offline recovery.

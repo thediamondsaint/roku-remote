@@ -23,6 +23,7 @@ import socket
 import subprocess
 import sys
 import time
+import tempfile
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -48,15 +49,30 @@ KEYMAP["replay"] = "InstantReplay"
 def load():
     try:
         with open(CACHE) as f:
-            return json.load(f)
-    except Exception:
-        return {"default": None, "devices": {}}
+            c = json.load(f)
+    except (OSError, ValueError):
+        c = {}
+    if not isinstance(c, dict):
+        c = {}
+    devices = c.get("devices", {})
+    if not isinstance(devices, dict):
+        devices = {}
+    return {"default": c.get("default") if isinstance(c.get("default"), str) else None,
+            "devices": {ip: name for ip, name in devices.items() if isinstance(name, str)}}
 
 
 def save(c):
-    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    with open(CACHE, "w") as f:
-        json.dump(c, f, indent=2)
+    directory = os.path.dirname(CACHE)
+    os.makedirs(directory, exist_ok=True)
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as f:
+            path = f.name
+            json.dump(c, f, indent=2)
+        os.replace(path, CACHE)
+    finally:
+        if path and os.path.exists(path):
+            os.unlink(path)
 
 
 def local_net():
@@ -98,17 +114,20 @@ def discover():
         found = {ip: name for r in ex.map(probe, hosts) if r for ip, name in [r]}
     c = load()
     c["devices"] = found
-    if c.get("default") not in found:
-        c["default"] = None
     save(c)
     return c
 
 
 def resolve(name, pick_first=False):
     c = load()
+    name = name or c.get("default")
+    if name and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", name):
+        try:
+            return str(ipaddress.IPv4Address(name))
+        except ValueError:
+            sys.exit(f"roku: invalid IPv4 address {name!r}")
     if not c["devices"]:
         c = discover()
-    name = name or c.get("default")
     devs = c["devices"]
     if not name:
         if not devs:
@@ -117,8 +136,6 @@ def resolve(name, pick_first=False):
             return next(iter(devs))
         sys.exit("roku: several devices found; pick one with -d NAME or `roku default NAME`\n"
                  + "\n".join(f"  {ip}  {n}" for ip, n in devs.items()))
-    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", name):
-        return name
     hits = [ip for ip, n in devs.items() if name.lower() in n.lower()]
     if not hits:  # cache may be stale
         devs = discover()["devices"]
@@ -164,6 +181,8 @@ def main(argv):
         print(f"default: {ip}  {c['devices'].get(ip, '')}")
         return
 
+    if cmd == "launch" and not rest:
+        sys.exit("roku: launch requires an app name or id")
     ip = resolve(dev, pick_first=(cmd == "info"))
 
     if cmd == "type":
@@ -185,23 +204,26 @@ def main(argv):
         print(f"launched {hits[0][1]}")
     elif cmd == "info":
         c = load()
-        d = get(ip, "/query/device-info")
-        a = get(ip, "/query/active-app").find("app")
-        try:
-            al = [{"id": i, "name": n} for i, n in apps(ip)]
-            limited = False
-        except urllib.error.HTTPError as e:
-            al, limited = [], e.code == 403
-        print(json.dumps({
-            "ip": ip,
-            "name": d.findtext("user-device-name") or d.findtext("friendly-device-name"),
-            "power": d.findtext("power-mode"),
-            "app": a.text if a is not None else "",
-            "apps": al,
-            "limited": limited,
+        result = {
+            "ip": ip, "name": c["devices"].get(ip, ip), "power": "", "app": "",
+            "apps": [], "limited": False, "unreachable": False,
             "default": c.get("default"),
             "devices": [{"ip": i, "name": n} for i, n in c["devices"].items()],
-        }))
+        }
+        try:
+            d = get(ip, "/query/device-info")
+            result["name"] = d.findtext("user-device-name") or d.findtext("friendly-device-name") or ip
+            result["power"] = d.findtext("power-mode") or ""
+            a = get(ip, "/query/active-app").find("app")
+            result["app"] = a.text if a is not None else ""
+            result["apps"] = [{"id": i, "name": n} for i, n in apps(ip)]
+        except urllib.error.HTTPError as e:
+            if e.code != 403:
+                raise
+            result["limited"] = True
+        except (urllib.error.URLError, OSError, ET.ParseError):
+            result["unreachable"] = True
+        print(json.dumps(result))
     elif cmd == "status":
         d = get(ip, "/query/device-info")
         a = get(ip, "/query/active-app").find("app")

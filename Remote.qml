@@ -14,6 +14,9 @@ Item {
   property var shell: null
   property var manifest: null
 
+  property int generation: 0
+  property int infoGeneration: -1
+  property bool scanning: false
   property bool opened: false
   property bool typing: false
   property bool pickerOpen: false
@@ -60,6 +63,14 @@ Item {
 
   // ---- lifecycle -----------------------------------------------------------
   function open(payloadJson) {
+    root.generation++
+    root.ip = ""
+    root.deviceName = ""
+    root.apps = []
+    root.power = ""
+    root.activeApp = ""
+    root.limited = false
+    root.unreachable = false
     root.opened = true
     root.typing = false
     root.pickerOpen = false
@@ -81,8 +92,17 @@ Item {
 
   // ---- device info ---------------------------------------------------------
   function refresh() {
+    if (!root.opened || infoProc.running || root.scanning) return
+    root.infoGeneration = root.generation
     infoProc.command = root.ip ? [root.rokuBin, "-d", root.ip, "info"] : [root.rokuBin, "info"]
     infoProc.running = true
+  }
+
+  function rescan() {
+    if (root.scanning) return
+    root.generation++
+    root.scanning = true
+    scanProc.running = true
   }
 
   function sortApps(list) {
@@ -97,12 +117,13 @@ Item {
   }
 
   function applyInfo(text) {
+    if (!root.opened || root.infoGeneration !== root.generation) return
     var d
     try { d = JSON.parse(text) } catch (e) {
       root.unreachable = true
       return
     }
-    root.unreachable = false
+    root.unreachable = d.unreachable === true
     root.ip = d.ip
     root.deviceName = d.name || d.ip
     root.power = d.power || ""
@@ -128,6 +149,7 @@ Item {
     if (!ip || ip === root.ip) return
     for (var i = 0; i < root.devices.length; i++)
       if (root.devices[i].ip === ip) root.deviceName = root.devices[i].name
+    root.generation++
     root.ip = ip
     root.apps = []
     root.limited = false
@@ -142,23 +164,23 @@ Item {
     var idx = 0
     for (var i = 0; i < root.devices.length; i++)
       if (root.devices[i].ip === root.ip) idx = i
-    root.ip = root.devices[(idx + 1) % root.devices.length].ip
-    root.apps = []
-    root.refresh()
+    root.selectDevice(root.devices[(idx + 1) % root.devices.length].ip)
   }
 
   // ---- sending -------------------------------------------------------------
   function post(path, onDone) {
     if (!root.ip) return
+    var target = root.ip
+    var requestGeneration = root.generation
     var x = new XMLHttpRequest()
     x.onreadystatechange = function() {
-      if (x.readyState !== XMLHttpRequest.DONE) return
+      if (x.readyState !== XMLHttpRequest.DONE || requestGeneration !== root.generation) return
       if (x.status === 403) root.limited = true
       else if (x.status === 0) root.unreachable = true
       else if (x.status === 200) { root.unreachable = false; if (path.indexOf("/keypress/") === 0) root.limited = false }
       if (onDone) onDone(x.status)
     }
-    x.open("POST", "http://" + root.ip + ":8060" + path)
+    x.open("POST", "http://" + target + ":8060" + path)
     x.send("")
   }
 
@@ -201,6 +223,8 @@ Item {
       return true
     }
 
+    if (k === Qt.Key_F5) { root.rescan(); return true }
+
     if (root.pickerOpen) {
       var n = root.devices.length
       if (k === Qt.Key_Escape || t === "d") { root.pickerOpen = false; return true }
@@ -239,11 +263,24 @@ Item {
     return true
   }
 
+  Timer { interval: 5000; repeat: true; running: root.opened; onTriggered: root.refresh() }
+  Process {
+    id: scanProc
+    command: [root.rokuBin, "list"]
+    stderr: StdioCollector {
+      onStreamFinished: if (text.trim()) { root.notice = "Scan failed. Check your network."; noticeTimer.restart() }
+    }
+    onExited: {
+      root.scanning = false
+      Qt.callLater(function() { root.refresh() })
+    }
+  }
   Timer { id: flashTimer; interval: 160; onTriggered: root.flashKey = "" }
   Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice = "" }
 
   Process {
     id: infoProc
+    onExited: if (root.infoGeneration !== root.generation) Qt.callLater(function() { root.refresh() })
     stdout: StdioCollector {
       onStreamFinished: root.applyInfo(text)
     }
@@ -474,11 +511,18 @@ Item {
             padding: Style.space(10)
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
-            text: "No Rokus found. Run `roku list` in a terminal to rescan."
+            text: "No Rokus found. Click Rescan to search your network."
             color: root.glyphColor
             opacity: 0.7
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
+          }
+
+          Button {
+            width: parent.width
+            text: root.scanning ? "Scanning…" : "Rescan TVs (F5)"
+            enabled: !root.scanning
+            onClicked: { root.rescan(); keyCatcher.forceActiveFocus() }
           }
 
           Repeater {
