@@ -298,16 +298,16 @@ Item {
   readonly property color glyphColor: "#e9e9ee"
   readonly property real pad: Style.space(18)
   readonly property real bodyW: Style.space(220)
-  readonly property real colW: bodyW - 2 * pad
+  readonly property real colW: bodyW - 2 * pad - Style.space(24)
   readonly property real sp: Style.space(10)
 
   function appColor(name) {
     var n = (name || "").toLowerCase()
     if (n.indexOf("netflix") >= 0) return "#c9151e"
     if (n.indexOf("youtube") >= 0) return "#d8201a"
-    if (n.indexOf("hulu") >= 0) return "#1ce783"
+    if (n.indexOf("hulu") >= 0) return "#087f47"
     if (n.indexOf("disney") >= 0) return "#1d3fbf"
-    if (n.indexOf("prime") >= 0) return "#0a86b4"
+    if (n.indexOf("prime") >= 0) return "#08749b"
     if (n.indexOf("max") >= 0) return "#5822b4"
     if (n.indexOf("apple") >= 0) return "#26262a"
     if (n.indexOf("plex") >= 0) return "#b8860b"
@@ -347,6 +347,8 @@ Item {
       anchors.fill: parent
       radius: Math.min(width, height) / 2
       color: ma.pressed || b.flash || b.lit ? root.rokuPurple : ma.containsMouse ? root.btnHover : root.btnColor
+      border.width: 1
+      border.color: ma.pressed ? "#111115" : "#414148"
       Behavior on color { ColorAnimation { duration: 90 } }
     }
     Text {
@@ -374,12 +376,33 @@ Item {
     id: dp
     width: root.colW
     height: root.colW
-    Rectangle {
+    // Molded purple cross, like the physical Roku direction pad.
+    Canvas {
       anchors.fill: parent
-      radius: width / 2
-      color: "#25252a"
-      border.width: 1
-      border.color: "#38383f"
+      onPaint: {
+        var c = getContext("2d")
+        var w = width, h = height, lo = 0.32, hi = 0.68, r = width * 0.08
+        c.clearRect(0, 0, w, h)
+        c.beginPath()
+        c.moveTo(w * lo + r, 1)
+        c.lineTo(w * hi - r, 1); c.quadraticCurveTo(w * hi, 1, w * hi, r)
+        c.lineTo(w * hi, h * lo); c.lineTo(w - r, h * lo)
+        c.quadraticCurveTo(w - 1, h * lo, w - 1, h * lo + r)
+        c.lineTo(w - 1, h * hi - r); c.quadraticCurveTo(w - 1, h * hi, w - r, h * hi)
+        c.lineTo(w * hi, h * hi); c.lineTo(w * hi, h - r)
+        c.quadraticCurveTo(w * hi, h - 1, w * hi - r, h - 1)
+        c.lineTo(w * lo + r, h - 1); c.quadraticCurveTo(w * lo, h - 1, w * lo, h - r)
+        c.lineTo(w * lo, h * hi); c.lineTo(r, h * hi)
+        c.quadraticCurveTo(1, h * hi, 1, h * hi - r)
+        c.lineTo(1, h * lo + r); c.quadraticCurveTo(1, h * lo, r, h * lo)
+        c.lineTo(w * lo, h * lo); c.lineTo(w * lo, r)
+        c.quadraticCurveTo(w * lo, 1, w * lo + r, 1)
+        c.closePath()
+        var gradient = c.createLinearGradient(0, 0, 0, h)
+        gradient.addColorStop(0, "#a264cf"); gradient.addColorStop(1, "#66359a")
+        c.fillStyle = gradient; c.fill()
+        c.strokeStyle = "#bb85dc"; c.lineWidth = 1; c.stroke()
+      }
     }
     Repeater {
       model: [
@@ -398,8 +421,8 @@ Item {
         Rectangle {
           anchors.fill: parent
           radius: width / 2
-          color: am.pressed || root.flashKey === arrow.modelData.cmd ? root.rokuPurple
-               : am.containsMouse ? "#3a3a41" : "transparent"
+          color: am.pressed || root.flashKey === arrow.modelData.cmd ? "#bb83ed"
+               : am.containsMouse ? "#995bc9" : "transparent"
         }
         Text {
           anchors.centerIn: parent
@@ -422,13 +445,13 @@ Item {
     }
     Rectangle {
       id: ok
-      width: dp.width * 0.40
+      width: dp.width * 0.34
       height: width
       radius: width / 2
       anchors.centerIn: parent
-      color: om.pressed || root.flashKey === "Select" ? root.rokuPurple : om.containsMouse ? root.btnHover : root.btnColor
+      color: om.pressed || root.flashKey === "Select" ? root.rokuPurple : om.containsMouse ? "#a469d4" : "#7845a6"
       border.width: 1
-      border.color: "#4a4a52"
+      border.color: "#be8ddd"
       Behavior on color { ColorAnimation { duration: 90 } }
       Text {
         anchors.centerIn: parent
@@ -460,7 +483,7 @@ Item {
     title: "Roku Remote"
     color: "transparent"
     implicitWidth: root.bodyW
-    implicitHeight: content.implicitHeight + root.pad * 2
+    implicitHeight: content.implicitHeight + root.pad * 2 + Style.space(16)
     minimumSize: Qt.size(implicitWidth, implicitHeight)
     maximumSize: Qt.size(implicitWidth, implicitHeight)
 
@@ -469,12 +492,35 @@ Item {
     Rectangle {
       id: card
       anchors.fill: parent
-      radius: Style.space(38)
-      color: root.bodyColor
+      radius: Style.space(48)
+      gradient: Gradient {
+        orientation: Gradient.Horizontal
+        GradientStop { position: 0; color: "#111114" }
+        GradientStop { position: 0.12; color: "#303034" }
+        GradientStop { position: 0.5; color: "#202024" }
+        GradientStop { position: 0.9; color: "#19191c" }
+        GradientStop { position: 1; color: "#08080a" }
+      }
       border.width: 1
       border.color: "#2c2c32"
 
       MouseArea { anchors.fill: parent; onClicked: keyCatcher.forceActiveFocus() }
+
+      Column {
+        x: card.width - Style.space(30)
+        y: Style.space(215)
+        spacing: Style.space(8)
+        Rectangle {
+          width: Style.space(25); height: Style.space(82); radius: width / 2
+          color: "#111114"; border.width: 1; border.color: "#43434a"
+          Column {
+            anchors.centerIn: parent
+            RBtn { width: Style.space(23); height: Style.space(38); cmd: "VolumeUp"; label: "+"; fontPx: Style.space(20); hint: "Volume up (+)"; onActivated: root.press("VolumeUp") }
+            RBtn { width: Style.space(23); height: Style.space(38); cmd: "VolumeDown"; label: "−"; fontPx: Style.space(20); hint: "Volume down (-)"; onActivated: root.press("VolumeDown") }
+          }
+        }
+        RBtn { width: Style.space(25); height: Style.space(32); cmd: "VolumeMute"; icon: root.glyph(0xF0581); fontPx: Style.space(15); hint: "Mute (m)"; onActivated: root.press("VolumeMute") }
+      }
 
       // Click anywhere else to dismiss the TV list
       MouseArea {
@@ -556,7 +602,7 @@ Item {
                 color: root.glyphColor
                 opacity: 0.45
                 font.family: Style.font.family
-                font.pixelSize: Style.font.caption - 1
+                font.pixelSize: Style.font.bodySmall
               }
               Text {
                 visible: devRow.isCurrent
@@ -598,34 +644,16 @@ Item {
         width: root.colW
         spacing: root.sp
 
-        // Top: keyboard (typing) | Roku wordmark | power
+        // TV power sits alone at the crown, as on the hardware remote.
         Item {
           width: parent.width
-          height: Style.space(38)
+          height: Style.space(44)
           RBtn {
-            width: parent.height; height: parent.height
-            anchors.left: parent.left
-            icon: root.glyph(0xF030C)
-            fontPx: Style.font.icon
-            lit: root.typing
-            hint: "Type text (t)"
-            onActivated: { root.typing = !root.typing; root.typed = "" }
-          }
-          Text {
+            width: Style.space(34); height: width
             anchors.centerIn: parent
-            text: "Roku"
-            color: "#a56bd6"
-            font.family: Style.font.family
-            font.pixelSize: Style.font.heading + Style.space(2)
-            font.bold: true
-            font.italic: true
-          }
-          RBtn {
-            width: parent.height; height: parent.height
-            anchors.right: parent.right
             icon: root.glyph(0xF0425)
             fontPx: Style.font.icon
-            glyph: "#ff7a7a"
+            glyph: "#ff666b"
             flash: root.flashKey === "PowerOff" || root.flashKey === "PowerOn"
             hint: "Power (p)"
             onActivated: root.togglePower()
@@ -657,6 +685,8 @@ Item {
                   color: root.statusColor
                 }
                 Text {
+                  width: Math.min(implicitWidth, root.colW - Style.space(35))
+                  elide: Text.ElideRight
                   text: root.deviceName || "Looking for Roku…"
                   color: root.glyphColor
                   font.family: Style.font.family
@@ -713,18 +743,26 @@ Item {
 
         // Back | Home
         Row {
-          spacing: root.sp
-          RBtn { width: (root.colW - root.sp) / 2; height: Style.space(40); cmd: "Back"; icon: root.glyph(0xF004D); hint: "Back (⌫ / b)"; onActivated: root.press("Back") }
-          RBtn { width: (root.colW - root.sp) / 2; height: Style.space(40); cmd: "Home"; icon: root.glyph(0xF02DC); hint: "Home (g)"; onActivated: root.press("Home") }
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: root.colW - Style.space(88)
+          RBtn { width: Style.space(44); height: width; cmd: "Back"; icon: root.glyph(0xF004D); hint: "Back (⌫ / b)"; onActivated: root.press("Back") }
+          RBtn { width: Style.space(44); height: width; cmd: "Home"; icon: root.glyph(0xF02DC); hint: "Home (g)"; onActivated: root.press("Home") }
         }
 
         DPad {}
 
-        // Replay | Options
+        // Replay | keyboard entry | Options. Keyboard entry replaces voice search.
         Row {
-          spacing: root.sp
-          RBtn { width: (root.colW - root.sp) / 2; height: Style.space(40); cmd: "InstantReplay"; icon: root.glyph(0xF0709); hint: "Instant replay (r)"; onActivated: root.press("InstantReplay") }
-          RBtn { width: (root.colW - root.sp) / 2; height: Style.space(40); cmd: "Info"; label: "✱"; fontPx: Style.font.heading + Style.space(4); hint: "Options (i)"; onActivated: root.press("Info") }
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: Style.space(12)
+          RBtn { width: Style.space(40); height: width; cmd: "InstantReplay"; icon: root.glyph(0xF0709); hint: "Instant replay (r)"; onActivated: root.press("InstantReplay") }
+          RBtn {
+            width: Style.space(40); height: width
+            icon: root.glyph(0xF030C); fontPx: Style.font.icon; lit: root.typing
+            hint: "Type into the TV keyboard (t)"
+            onActivated: { root.typing = !root.typing; root.typed = "" }
+          }
+          RBtn { width: Style.space(40); height: width; cmd: "Info"; label: "✱"; hint: "Options (i)"; onActivated: root.press("Info") }
         }
 
         // Rewind | Play/Pause | Fast-forward
@@ -735,31 +773,24 @@ Item {
           RBtn { width: (root.colW - 2 * root.sp) / 3; height: Style.space(40); cmd: "Fwd"; icon: root.glyph(0xF0211); hint: "Fast forward (.)"; onActivated: root.press("Fwd") }
         }
 
-        // Volume down | Mute | Volume up
-        Row {
-          spacing: root.sp
-          RBtn { width: (root.colW - 2 * root.sp) / 3; height: Style.space(40); cmd: "VolumeDown"; icon: root.glyph(0xF057F); hint: "Volume down (-)"; onActivated: root.press("VolumeDown") }
-          RBtn { width: (root.colW - 2 * root.sp) / 3; height: Style.space(40); cmd: "VolumeMute"; icon: root.glyph(0xF0581); hint: "Mute (m)"; onActivated: root.press("VolumeMute") }
-          RBtn { width: (root.colW - 2 * root.sp) / 3; height: Style.space(40); cmd: "VolumeUp"; icon: root.glyph(0xF057E); hint: "Volume up (+)"; onActivated: root.press("VolumeUp") }
-        }
-
         // App shortcut buttons (keys 1-4; 5-8 also work)
-        Row {
-          spacing: Style.space(6)
+        Grid {
+          columns: 2
+          spacing: Style.space(9)
           Repeater {
             model: root.apps.slice(0, 4)
             delegate: Item {
               id: appBtn
               required property int index
               required property var modelData
-              width: (root.colW - 3 * Style.space(6)) / 4
-              height: Style.space(32)
+              width: (root.colW - Style.space(9)) / 2
+              height: Style.space(34)
               Rectangle {
                 anchors.fill: parent
                 radius: Style.space(7)
-                color: root.appColor(appBtn.modelData.name)
+                color: "#eeedf0"
                 border.width: root.activeApp === appBtn.modelData.name ? 2 : 0
-                border.color: "#ffffff"
+                border.color: root.rokuPurple
                 opacity: am2.pressed ? 0.7 : am2.containsMouse ? 1.0 : 0.88
                 Behavior on opacity { NumberAnimation { duration: 90 } }
               }
@@ -769,7 +800,7 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 text: root.appLabel(appBtn.modelData.name)
-                color: root.appTextColor(appBtn.modelData.name)
+                color: root.appColor(appBtn.modelData.name)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 1
                 font.bold: true
@@ -795,8 +826,32 @@ Item {
         Text {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
+          text: "Roku"
+          color: "#a875d2"
+          font.family: "sans-serif"
+          font.pixelSize: Style.space(30)
+          font.bold: true
+          font.letterSpacing: -1
+        }
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          text: "<a href='https://github.com/thediamondsaint/roku-remote' style='color:#a9a0b5;text-decoration:none'>by thediamondsaint</a>"
+          textFormat: Text.RichText
+          font.family: Style.font.family
+          font.pixelSize: Style.space(10)
+          onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+          MouseArea { id: creditHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton; cursorShape: Qt.PointingHandCursor }
+          ToolTip.visible: creditHover.containsMouse
+          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.2.0\nView source, installation instructions, and issues on GitHub"
+          ToolTip.delay: 400
+        }
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
           wrapMode: Text.WordWrap
-          text: root.notice ? root.notice : "hjkl · ⏎ · ⌫ back · g home · t type · d TVs · 1-8 apps · esc"
+          visible: root.notice !== ""
+          text: root.notice
           color: root.glyphColor
           opacity: root.notice ? 0.9 : 0.35
           font.family: Style.font.family

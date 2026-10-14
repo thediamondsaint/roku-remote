@@ -1,12 +1,12 @@
 # Roku Remote for Omarchy
 
-<p align="center"><img src="docs/screenshot.png" width="260" alt="The Roku remote window with the TV list open: dark rounded body, circular D-pad with OK, media and volume buttons, and coloured app shortcuts"></p>
+<p align="center"><img src="docs/screenshot.png" width="260" alt="The Roku remote: sculpted dark body, purple directional pad, side volume rocker, four app shortcuts, and creator credit"></p>
 
 A Roku remote that looks like a real one, as a floating window for [Omarchy](https://omarchy.org)
 (Hyprland + Quickshell). Keyboard- and mouse-driven, talks straight to your TV over your local network.
 
-- Round buttons, a circular D-pad with OK, media and volume rows
-- Four coloured app buttons (keys `1`-`4`; `5`-`8` also work) and a "now playing" line
+- Sculpted dark body, purple directional pad, round buttons, and a side volume rocker
+- Four app buttons in a two-by-two layout (keys `1`-`4`; `5`-`8` also work) and a "now playing" line
 - Type into the TV's on-screen keyboard from your keyboard
 - Switch between several Rokus from a drop-down list (click the TV name, or press `d`)
 - Bundled `roku` command-line tool (`roku home`, `roku volup*3`, `roku netflix`, ...)
@@ -89,6 +89,12 @@ scans your local subnet for Rokus. Colours are fixed (the Roku look), not taken 
 - **Red dot ("can't reach"):** the TV is off or on another network/VLAN.
 - **Nothing found:** click the TV name and choose **Rescan TVs**, or press `F5`.
 - **After editing `Remote.qml`:** run `omarchy restart shell` (plugin QML is cached).
+
+## Creator
+
+Made by **Charles Nardella ([@thediamondsaint](https://github.com/thediamondsaint))**.
+Click the credit at the bottom of the remote to open this repository.
+This is an independent community project for Omarchy.
 
 ## License
 
