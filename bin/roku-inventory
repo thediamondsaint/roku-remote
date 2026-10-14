@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from datetime import datetime
 import subprocess
 import sys
 import tempfile
@@ -145,7 +146,10 @@ def main():
                     getattr(content, 'set_margin_' + side)(12)
                 content.append(label(d['name'], True))
                 content.append(label(d['ip'] + ' • ' + info.get('model-name', 'Unknown model')))
-                badge = label('Partial data' if d['errors'] else 'All four queries available')
+                state = 'Offline / unreachable' if d.get('reachable') is False else 'Reachable'
+                if d.get('reachable') is not False and info.get('power-mode') and info['power-mode'] != 'PowerOn':
+                    state = 'Standby / reachable'
+                badge = label(state + (' • partial data' if d['errors'] and d.get('reachable') is not False else ''))
                 badge.add_css_class('dim-label')
                 content.append(badge)
                 row.set_child(content)
@@ -163,11 +167,15 @@ def main():
             self.selected_ip = d['ip']
             self.details.append(label(d['name'], True))
             self.details.append(label(d['ip']))
+            if d.get('reachable') is False:
+                seen = datetime.fromtimestamp(d['last_seen']).strftime('%b %d, %Y %H:%M') if d.get('last_seen') else 'unknown'
+                self.details.append(label(f'Offline / unreachable • last seen: {seen}. Details below are last known. Power on will try Wake-on-LAN.'))
             controls = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6)
             controls.set_max_children_per_line(7)
             for title, command in [('Power on', 'poweron'), ('Power off', 'poweroff'), ('Home', 'home'),
                                    ('Mute', 'mute'), ('Vol −', 'voldown'), ('Vol +', 'volup')]:
                 button = Gtk.Button(label=title)
+                button.set_sensitive(d.get('reachable') is not False or command == 'poweron')
                 button.connect('clicked', lambda b, command=command, ip=d['ip']: self.control(b, ip, [command]))
                 controls.append(button)
             remote = Gtk.Button(label='Full remote')
@@ -184,7 +192,7 @@ def main():
             self.details.append(tabs)
             info = fields(d['queries'].get('device-info', {}))
             active = d['queries'].get('active-app', {}).get('children', [])
-            summary = [('Device type', 'Roku TV' if info.get('is-tv') == 'true' else 'Roku player'),
+            summary = [('Reachability', 'Offline / unreachable' if d.get('reachable') is False else 'Reachable'), ('Device type', 'Roku TV' if info.get('is-tv') == 'true' else ('Roku player' if info.get('is-tv') == 'false' else 'Unknown')),
                        ('Model', info.get('model-name', '')), ('Manufacturer', info.get('vendor-name', '')),
                        ('Roku OS', info.get('software-version', '')), ('Power', info.get('power-mode', '')),
                        ('Current app / input', active[0].get('text', '') if active else ''),
@@ -238,7 +246,7 @@ def main():
                 command = (['omarchy-shell', 'shell', 'summon', 'charles.roku-remote', json.dumps({'ip': ip})]
                            if remote else [str(CLI), '-d', ip] + arguments)
                 try:
-                    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
                     if result.returncode:
                         message = f'{ip}: {result.stderr.strip() or "Command failed"}'
                     else:
@@ -277,8 +285,9 @@ def main():
                 self.status.set_text('Scan failed: ' + error)
             else:
                 self.report = report
-                partial = sum(bool(d['errors']) for d in report)
-                self.status.set_text(f'{len(report)} devices • {partial} with partial data • updated just now')
+                offline = sum(d.get('reachable') is False for d in report)
+                partial = sum(bool(d['errors']) and d.get('reachable') is not False for d in report)
+                self.status.set_text(f'{len(report)} known devices • {offline} offline / unreachable • {partial} with partial data • updated just now')
                 self.populate()
             return False
 

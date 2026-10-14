@@ -18,6 +18,9 @@ class RokuTests(unittest.TestCase):
         self.g = self.roku['main'].__globals__
         self.g['PREFERENCES'] = str(Path(self.temp.name) / 'prefs' / 'shortcuts.json')
         self.g['CACHE'] = str(Path(self.temp.name) / 'roku.json')
+        self.g['REGISTRY'] = str(Path(self.temp.name) / 'prefs' / 'devices.json')
+        self.g['INVENTORY_CACHE'] = str(Path(self.temp.name) / 'inventory.json')
+        self.g['ssdp_discover'] = lambda: set()
 
     def cache(self, value):
         Path(self.g['CACHE']).write_text(json.dumps(value))
@@ -111,6 +114,71 @@ class RokuTests(unittest.TestCase):
         with patch('urllib.request.urlopen', side_effect=error), patch.dict(self.g, ecp_request=lambda ip, path: calls.append((ip,path))):
             self.roku['post']('192.168.1.50', '/keypress/PowerOn')
         self.assertEqual(calls, [('192.168.1.50','/keypress/PowerOn')])
+
+    def test_scan_retains_sleeping_devices_and_saved_macs(self):
+        self.cache({'default': '192.168.1.51', 'devices': {'192.168.1.50': 'On TV', '192.168.1.51': 'Sleeping TV'}})
+        records = {'192.168.1.51': {'name': 'Sleeping TV', 'info': {'wifi-mac': 'AA:BB:CC:DD:EE:FF'}, 'last_seen': 100}}
+        self.roku['save_json'](self.g['REGISTRY'], records)
+        with patch.dict(self.g, local_net=lambda: SimpleNamespace(hosts=lambda: []), probe=lambda ip: None):
+            result = self.roku['discover']()
+        self.assertIn('192.168.1.51', result['devices'])
+        self.assertEqual(result['default'], '192.168.1.51')
+        self.assertFalse(self.roku['registry']()['192.168.1.51']['reachable'])
+        self.assertEqual(self.roku['registry']()['192.168.1.51']['info']['wifi-mac'], 'AA:BB:CC:DD:EE:FF')
+
+    def test_saved_inventory_recovers_a_device_missing_from_latest_scan(self):
+        report = [{'ip': '192.168.1.51', 'name': 'Sleeping TV', 'queries': {'device-info':
+            {'children': [{'tag': 'wifi-mac', 'text': 'AA:BB:CC:DD:EE:FF'}]}}}]
+        Path(self.g['INVENTORY_CACHE']).write_text(json.dumps(report))
+        self.assertEqual(self.roku['registry']()['192.168.1.51']['info']['wifi-mac'], 'AA:BB:CC:DD:EE:FF')
+
+    def test_identity_migration_updates_default_and_shortcuts(self):
+        self.cache({'default': '192.168.1.50', 'devices': {'192.168.1.50': 'TV'}})
+        self.roku['save_json'](self.g['REGISTRY'], {'192.168.1.50': {'name': 'TV', 'info': {'device-id': 'stable'}}})
+        self.roku['save_json'](self.g['PREFERENCES'], {'192.168.1.50': [{'id': '12', 'name': 'Netflix'}]})
+        def probe(ip):
+            return (ip, 'TV', {'device-id': 'stable'}) if ip == '192.168.1.51' else None
+        with patch.dict(self.g, local_net=lambda: SimpleNamespace(hosts=lambda: ['192.168.1.51']), probe=probe):
+            result = self.roku['discover']()
+        self.assertEqual(result['default'], '192.168.1.51')
+        self.assertNotIn('192.168.1.50', result['devices'])
+        self.assertIn('192.168.1.51', self.roku['preferences']())
+
+    def test_magic_packet_is_valid_and_invalid_macs_are_rejected(self):
+        packet = self.roku['wake_packet']('AA:BB:CC:DD:EE:FF')
+        self.assertEqual(len(packet), 102)
+        self.assertEqual(packet, b'\xff' * 6 + bytes.fromhex('AABBCCDDEEFF') * 16)
+        with self.assertRaises(ValueError):
+            self.roku['wake_packet']('not-a-mac')
+
+    def test_wake_sends_broadcast_and_checks_response(self):
+        self.roku['save_json'](self.g['REGISTRY'], {'192.168.1.51': {'name': 'TV', 'info': {'wifi-mac': 'AA:BB:CC:DD:EE:FF'}}})
+        with patch('socket.socket') as factory, patch.dict(self.g,
+                probe=lambda ip: (ip, 'TV', {'wifi-mac': 'AA:BB:CC:DD:EE:FF'})):
+            self.assertTrue(self.roku['wake_device']('192.168.1.51', wait=1))
+            calls = factory.return_value.__enter__.return_value.sendto.call_args_list
+            self.assertEqual(len(calls), 2)
+            self.assertEqual({c.args[1] for c in calls}, {('255.255.255.255', 9), ('192.168.1.255', 9)})
+
+    def test_unanswered_wake_is_not_reported_as_success(self):
+        self.roku['save_json'](self.g['REGISTRY'], {'192.168.1.51': {'name': 'TV', 'info': {'mac': 'AA:BB:CC:DD:EE:FF'}}})
+        with patch('socket.socket'):
+            self.assertFalse(self.roku['wake_device']('192.168.1.51', wait=0))
+
+    def test_power_on_uses_wake_only_when_connection_fails(self):
+        with patch.dict(self.g, wake_device=lambda ip: True):
+            with patch.dict(self.g, post=unittest.mock.Mock(side_effect=[urllib.error.URLError('asleep'), None])):
+                self.assertIn('Wake-on-LAN', self.roku['power_on']('192.168.1.51'))
+                self.assertEqual(self.g['post'].call_count, 2)
+
+    def test_offline_inventory_uses_explicitly_marked_last_known_details(self):
+        self.roku['save_json'](self.g['REGISTRY'], {'192.168.1.51': {'name': 'TV', 'info': {'model-name': 'TCL'}, 'last_seen': 100}})
+        with patch.dict(self.g, get=unittest.mock.Mock(side_effect=urllib.error.URLError('asleep'))):
+            result = self.roku['inventory_device'](('192.168.1.51', 'TV'))
+            self.assertEqual(self.g['get'].call_count, 1)
+        self.assertFalse(result['reachable'])
+        self.assertTrue(result['cached'])
+        self.assertEqual(result['last_seen'], 100)
 
 
 if __name__ == '__main__':

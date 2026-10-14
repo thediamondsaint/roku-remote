@@ -65,7 +65,7 @@ Item {
   // Status dot: red = unreachable, amber = TV ignores buttons (Limited mode), green = on, grey = standby.
   readonly property color statusColor: unreachable ? "#ff5f5f" : limited ? "#f0a030"
                                      : power === "PowerOn" ? "#3ddc84" : "#77777f"
-  readonly property string statusNote: unreachable ? "Can't reach this TV (is it on, and on the same network?)"
+  readonly property string statusNote: unreachable ? "TV is offline or unreachable. Power on will try Wake-on-LAN using its saved MAC address."
     : limited ? "Network control was refused. On the TV: Settings › System › Advanced system settings › Control by mobile apps › Network access › Enabled."
     : root.controlTransport === "ecp-2" ? "Connected using authenticated ECP-2" : ""
 
@@ -752,7 +752,7 @@ Item {
               Text {
                 x: Style.space(12)
                 y: Style.space(21)
-                text: devRow.modelData.ip + (devRow.modelData.ip === root.defaultIp ? "  ·  default" : "")
+                text: devRow.modelData.ip + (devRow.modelData.reachable === false ? " · offline" : "") + (devRow.modelData.ip === root.defaultIp ? "  ·  default" : "")
                 color: root.glyphColor
                 opacity: 0.45
                 font.family: Style.font.family
@@ -1011,7 +1011,7 @@ Item {
           onLinkActivated: function(link) { Qt.openUrlExternally(link) }
           MouseArea { id: creditHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton; cursorShape: Qt.PointingHandCursor }
           ToolTip.visible: creditHover.containsMouse
-          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.5.0\nView source, installation instructions, and issues on GitHub"
+          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.6.0\nView source, installation instructions, and issues on GitHub"
           ToolTip.delay: 400
         }
         Text {

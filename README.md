@@ -85,6 +85,32 @@ roku default NAME             remember the default TV
 
 Repeat a key with `KEY*N`, e.g. `roku down*5 select`. `NAME` is part of a device name or an IP address.
 
+## Offline TVs and Wake-on-LAN
+
+`roku list` retains every previously discovered Roku and labels devices **on**,
+**standby / reachable**, or **offline / unreachable**. Scans combine subnet discovery,
+SSDP announcements, and known IPs. Sleep is not proof a TV has disappeared.
+Names, device identities, MAC addresses, and last-seen times are stored persistently
+in `~/.config/roku-remote/devices.json`. Existing inventory reports seed the registry.
+
+```bash
+roku list
+roku -d "Back Living room" poweron  # HTTP/ECP-2 first; Wake-on-LAN if unreachable
+roku -d "Back Living room" wake     # send magic packets and wait for a response
+roku remember "Bedroom TV" 192.168.1.80 AA:BB:CC:DD:EE:FF
+```
+
+Scan each TV while it is reachable once to save its MAC address. An unresponsive TV
+that has never been seen cannot be identified by a network scan; add its known IP
+and MAC manually if needed. Wake-on-LAN requires the TV to remain plugged in and to
+support network wake. **Settings → System → Power → Fast TV Start** may be required.
+A sent wake packet is not reported as success until the TV responds.
+
+The inventory viewer and floating remote keep offline TVs selectable; their **Power on**
+controls use the same wake fallback. Offline inventory details are marked as last known.
+When a device is rediscovered at a new IP, its stable identity moves the default and
+saved app shortcuts to the new address. Use `roku list` if its IP changes while asleep.
+
 ## Inventory viewer
 
 Run `roku inventory-ui` or `bin/roku-inventory` for the native desktop viewer.
@@ -111,9 +137,10 @@ model, software version, serial number, network identifiers, and capabilities wh
 available. Blocked or unsupported endpoints are reported individually. It sends no
 power, keypress, or launch commands. Treat exported reports as private device inventory.
 
-Discovery covers the default interface’s local subnet, capped at its own `/24`.
-It cannot guarantee discovery of sleeping TVs, other VLANs, or devices outside that
-range; query their known IPs explicitly. No account passwords or reliable viewer
+Subnet discovery covers the default interface’s local subnet, capped at its own `/24`;
+SSDP and retained known IPs supplement that scan.
+Sleeping TVs remain listed after they have been seen once. It cannot discover a
+never-seen device that is completely unresponsive, or guarantee discovery across VLANs. No account passwords or reliable viewer
 names are available through these queries.
 
 ## How it works

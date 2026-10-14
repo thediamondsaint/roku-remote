@@ -98,6 +98,13 @@ async function bridge() {
   async function perform(message) {
     const {ip, path} = message;
     if (isIP(ip) !== 4) throw new Error('Invalid device IP');
+    if (path === '/keypress/PowerOn') {
+      const {promisify} = require('node:util');
+      const {execFile} = require('node:child_process');
+      const {join} = require('node:path');
+      const result = await promisify(execFile)(join(__dirname, 'roku'), ['-d', ip, 'poweron'], {timeout:50000});
+      return {status:200, transport:'power-on', message:result.stdout.trim()};
+    }
     const [command, params] = translate(path);
     if (!websocketDevices.has(ip)) {
       const response = await fetch(`http://${ip}:8060${path}`, {method:command.startsWith('query-') ? 'GET' : 'POST', body:command.startsWith('query-') ? undefined : '', signal:AbortSignal.timeout(3000)});

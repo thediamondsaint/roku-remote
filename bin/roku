@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Control Roku devices over the local network (ECP, port 8060).
 
-  roku list                     find Rokus on the LAN (cached)
+  roku list                     scan and list reachable and remembered offline Rokus
+  roku [-d NAME] wake            send Wake-on-LAN and wait for the TV
+  roku remember NAME IP [MAC]    remember a TV manually
   roku [-d NAME] inventory [--json]  read device details, apps, and playback state
   roku [-d NAME] KEY...         send keys: home up down left right select back play
                                 rev fwd volup voldown mute power info replay ...
@@ -32,6 +34,8 @@ import xml.etree.ElementTree as ET
 
 CACHE = os.path.expanduser("~/.cache/roku.json")
 PREFERENCES = os.path.expanduser("~/.config/roku-remote/shortcuts.json")
+REGISTRY = os.path.expanduser("~/.config/roku-remote/devices.json")
+INVENTORY_CACHE = os.path.expanduser("~/.cache/roku-inventory.json")
 PORT = 8060
 
 ALIASES = {
@@ -97,6 +101,72 @@ def valid_shortcuts(value):
                 isinstance(a.get("name"), str) and a["name"] for a in value))
 
 
+def valid_ip(value):
+    try:
+        return isinstance(value, str) and ipaddress.ip_address(value).version == 4
+    except ValueError:
+        return False
+
+
+def registry():
+    """Persistent device identities survive cache clearing and sleeping TVs."""
+    try:
+        with open(REGISTRY) as f:
+            records = json.load(f)
+        if isinstance(records, dict):
+            return {ip: r for ip, r in records.items() if valid_ip(ip) and isinstance(r, dict)
+                    and isinstance(r.get("name"), str) and isinstance(r.get("info", {}), dict)}
+    except (OSError, ValueError):
+        pass
+    records = {ip: {"name": name, "info": {}, "reachable": None, "last_seen": None}
+               for ip, name in load()["devices"].items() if valid_ip(ip)}
+    try:
+        with open(INVENTORY_CACHE) as f:
+            report = json.load(f)
+        for device in report if isinstance(report, list) else []:
+            if not isinstance(device, dict) or not valid_ip(device.get("ip")):
+                continue
+            node = device.get("queries", {}).get("device-info", {})
+            info = {c["tag"]: c.get("text", "") for c in node.get("children", [])}
+            records[device["ip"]] = {"name": device.get("name", device["ip"]), "info": info,
+                                     "reachable": None, "last_seen": None}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return records
+
+
+def remember_info(ip, info):
+    records = registry()
+    record = records.get(ip, {})
+    name = info.get("user-device-name") or info.get("friendly-device-name") or record.get("name") or ip
+    record.update(name=name, info=info, reachable=True, last_seen=time.time())
+    records[ip] = record
+    save_json(REGISTRY, records)
+
+
+def ssdp_discover(timeout=1):
+    """Ask Rokus on the LAN to announce their control service."""
+    request = ("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+               'MAN: "ssdp:discover"\r\nMX: 1\r\nST: roku:ecp\r\n\r\n').encode()
+    found = set()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(timeout)
+            sock.sendto(request, ("239.255.255.250", 1900))
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                sock.settimeout(max(0.01, deadline - time.monotonic()))
+                data, _ = sock.recvfrom(8192)
+                location = re.search(r"^location:\s*(\S+)", data.decode(errors="replace"), re.I | re.M)
+                if location:
+                    url = urllib.parse.urlsplit(location.group(1))
+                    if url.scheme == "http" and valid_ip(url.hostname) and url.port == PORT:
+                        found.add(url.hostname)
+    except (OSError, ValueError):
+        pass
+    return found
+
+
 def local_net():
     """The /24 (or smaller) network of the interface that carries the default route."""
     def run(*a):
@@ -125,17 +195,34 @@ def probe(ip):
         x = urllib.request.urlopen(f"http://{ip}:{PORT}/query/device-info", timeout=2).read()
         root = ET.fromstring(x)
         g = lambda t: (root.findtext(t) or "").strip()
-        return str(ip), g("user-device-name") or g("friendly-device-name") or g("model-name")
+        return str(ip), g("user-device-name") or g("friendly-device-name") or g("model-name"), {c.tag: (c.text or "").strip() for c in root}
     except Exception:
         return None
 
 
 def discover():
-    hosts = list(local_net().hosts())
+    records = registry()
+    hosts = {str(ip) for ip in local_net().hosts()} | set(records) | ssdp_discover()
     with cf.ThreadPoolExecutor(128) as ex:
-        found = {ip: name for r in ex.map(probe, hosts) if r for ip, name in [r]}
+        found = [r for r in ex.map(probe, sorted(hosts)) if r]
     c = load()
-    c["devices"] = found
+    for record in records.values():
+        record["reachable"] = False
+    for ip, name, info in found:
+        identity = info.get("device-id") or info.get("serial-number")
+        old_ip = next((old for old, r in records.items() if old != ip and identity and
+                       (r.get("info", {}).get("device-id") or r.get("info", {}).get("serial-number")) == identity), None)
+        if old_ip:
+            del records[old_ip]
+            if c.get("default") == old_ip:
+                c["default"] = ip
+            shortcuts = preferences()
+            if old_ip in shortcuts:
+                shortcuts[ip] = shortcuts.pop(old_ip)
+                save_json(PREFERENCES, shortcuts)
+        records[ip] = {"name": name, "info": info, "reachable": True, "last_seen": time.time()}
+    c["devices"] = {ip: r["name"] for ip, r in records.items()}
+    save_json(REGISTRY, records)
     save(c)
     return c
 
@@ -150,12 +237,14 @@ def resolve(name, pick_first=False):
             sys.exit(f"roku: invalid IPv4 address {name!r}")
     if not c["devices"]:
         c = discover()
-    devs = c["devices"]
+    devs = {ip: r["name"] for ip, r in registry().items()}
+    devs.update(c["devices"])
     if not name:
         if not devs:
             sys.exit("roku: no Roku found on the local network (is it on, and on the same subnet?)")
         if len(devs) == 1 or pick_first:
-            return next(iter(devs))
+            online = [ip for ip, record in registry().items() if record.get("reachable")]
+            return online[0] if online else next(iter(devs))
         sys.exit("roku: several devices found; pick one with -d NAME or `roku default NAME`\n"
                  + "\n".join(f"  {ip}  {n}" for ip, n in devs.items()))
     hits = [ip for ip, n in devs.items() if name.lower() in n.lower()]
@@ -221,16 +310,79 @@ def xml_data(node):
     return result
 
 
+def wake_packet(mac):
+    compact = re.sub(r"[:-]", "", mac)
+    if not re.fullmatch(r"[0-9a-fA-F]{12}", compact):
+        raise ValueError("invalid MAC address")
+    return b"\xff" * 6 + bytes.fromhex(compact) * 16
+
+
+def wake_device(ip, wait=20):
+    record = registry().get(ip, {})
+    info = record.get("info", {})
+    macs = {info.get("wifi-mac"), info.get("ethernet-mac"), info.get("mac")}
+    packets = []
+    for mac in macs - {None, ""}:
+        try:
+            packets.append(wake_packet(mac))
+        except ValueError:
+            pass
+    if not packets:
+        sys.exit("roku: no saved MAC address for this TV. Scan while it is on, or use "
+                 "`roku remember NAME IP MAC` first.")
+    broadcasts = {"255.255.255.255", str(ipaddress.ip_network(ip + "/24", strict=False).broadcast_address)}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for packet in packets:
+            for address in broadcasts:
+                sock.sendto(packet, (address, 9))
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        result = probe(ip)
+        if result:
+            remember_info(ip, result[2])
+            return True
+        time.sleep(1)
+    return False
+
+
+def power_on(ip):
+    try:
+        post(ip, "/keypress/PowerOn")
+        return "Power-on command accepted"
+    except urllib.error.HTTPError:
+        raise
+    except (urllib.error.URLError, OSError):
+        if not wake_device(ip):
+            sys.exit("roku: wake packets sent, but the TV has not responded. It may require Fast TV Start, "
+                     "be disconnected, or have a new IP address. Run `roku list` to rescan.")
+        post(ip, "/keypress/PowerOn")
+        return "TV responded after Wake-on-LAN; power-on command accepted"
+
+
 def inventory_device(device):
     ip, name = device
-    result = {"ip": ip, "name": name, "queries": {}, "errors": {}}
+    record = registry().get(ip, {})
+    result = {"ip": ip, "name": name, "queries": {}, "errors": {},
+              "reachable": False, "last_seen": record.get("last_seen"), "cached": False}
     for endpoint in ("device-info", "apps", "active-app", "media-player"):
         try:
-            result["queries"][endpoint] = xml_data(get(ip, "/query/" + endpoint))
+            node = get(ip, "/query/" + endpoint)
+            result["queries"][endpoint] = xml_data(node)
+            if endpoint == "device-info":
+                result["reachable"] = True
+                result["last_seen"] = time.time()
         except (urllib.error.URLError, OSError, ET.ParseError) as e:
             result["errors"][endpoint] = str(e)
             if isinstance(e, urllib.error.HTTPError):
                 e.close()
+            if endpoint == "device-info":
+                info = record.get("info", {})
+                if info:
+                    result["queries"][endpoint] = {"tag": "device-info", "attributes": {},
+                        "children": [{"tag": k, "attributes": {}, "text": v} for k, v in info.items()]}
+                    result["cached"] = True
+                break
     return result
 
 
@@ -254,7 +406,7 @@ def print_inventory(report):
     if not report:
         print("No Rokus found in the local discovery subnet.")
     for device in report:
-        print(f"\n{device['name']} ({device['ip']})")
+        print(f"\n{device['name']} ({device['ip']}) — {'reachable' if device['reachable'] else 'offline / unreachable'}" + (" (last known details)" if device["cached"] else ""))
         for node in device["queries"].values():
             lines(node)
         for endpoint, error in device["errors"].items():
@@ -271,6 +423,26 @@ def main(argv):
 
     cmd, rest = argv[0].lower(), argv[1:]
 
+    if cmd == "remember":
+        if len(rest) not in (2, 3) or not valid_ip(rest[1]):
+            sys.exit("roku: remember NAME IP [MAC]")
+        if len(rest) == 3:
+            try:
+                wake_packet(rest[2])
+            except ValueError:
+                sys.exit("roku: invalid MAC address")
+        records = registry()
+        record = records.get(rest[1], {"info": {}, "reachable": None, "last_seen": None})
+        record["name"] = rest[0]
+        if len(rest) == 3:
+            record["info"]["mac"] = rest[2]
+        records[rest[1]] = record
+        save_json(REGISTRY, records)
+        c = load()
+        c["devices"][rest[1]] = rest[0]
+        save(c)
+        print(f"Remembered {rest[0]} ({rest[1]})")
+        return
     if cmd == "bridge":
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "roku-ecp.cjs")
         os.execvp("node", ["node", script, "--bridge"])
@@ -289,8 +461,13 @@ def main(argv):
         return
     if cmd in ("list", "discover"):
         c = discover()
+        records = registry()
         for ip, n in c["devices"].items():
-            print(f"{'*' if c.get('default') == ip else ' '} {ip:15}  {n}")
+            record = records.get(ip, {})
+            state = "offline / unreachable"
+            if record.get("reachable"):
+                state = "on" if record.get("info", {}).get("power-mode") == "PowerOn" else "standby / reachable"
+            print(f"{'*' if c.get('default') == ip else ' '} {ip:15}  {n}  [{state}]")
         return
     if cmd == "default":
         ip = resolve(rest[0] if rest else sys.exit("roku default NAME"))
@@ -304,6 +481,12 @@ def main(argv):
         sys.exit("roku: launch requires an app name or id")
     ip = resolve(dev, pick_first=(cmd == "info"))
 
+    if cmd == "wake":
+        if wake_device(ip):
+            print("TV responded after Wake-on-LAN")
+        else:
+            sys.exit("roku: wake packets sent, but the TV has not responded. Check Fast TV Start, power, and network connection.")
+        return
     if cmd == "shortcuts":
         try:
             selection = json.loads(rest[0]) if len(rest) == 1 else None
@@ -336,17 +519,20 @@ def main(argv):
     elif cmd == "info":
         c = load()
         saved = preferences().get(ip, [])
+        record = registry().get(ip, {})
         result = {
-            "ip": ip, "name": c["devices"].get(ip, ip), "power": "", "app": "",
+            "ip": ip, "name": c["devices"].get(ip, record.get("name", ip)), "power": "", "app": "",
             "apps": [], "limited": False, "unreachable": False,
             "shortcuts": saved if valid_shortcuts(saved) else [],
+            "wake_available": any(record.get("info", {}).get(k) for k in ("wifi-mac", "ethernet-mac", "mac")),
             "default": c.get("default"),
-            "devices": [{"ip": i, "name": n} for i, n in c["devices"].items()],
+            "devices": [{"ip": i, "name": r["name"], "reachable": r.get("reachable")} for i, r in registry().items()],
         }
         try:
             d = get(ip, "/query/device-info")
             result["name"] = d.findtext("user-device-name") or d.findtext("friendly-device-name") or ip
             result["power"] = d.findtext("power-mode") or ""
+            remember_info(ip, {child.tag: (child.text or "").strip() for child in d})
             a = get(ip, "/query/active-app").find("app")
             result["app"] = a.text if a is not None else ""
             result["apps"] = [{"id": i, "name": n} for i, n in apps(ip)]
@@ -375,7 +561,10 @@ def main(argv):
             if not k:
                 sys.exit(f"roku: unknown key or command {tok!r} (see `roku --help`)")
             for _ in range(int(m.group(2) or 1)):
-                post(ip, f"/keypress/{k}")
+                if k == "PowerOn":
+                    print(power_on(ip))
+                else:
+                    post(ip, f"/keypress/{k}")
                 time.sleep(0.08)
 
 
