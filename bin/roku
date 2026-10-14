@@ -29,6 +29,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 CACHE = os.path.expanduser("~/.cache/roku.json")
+PREFERENCES = os.path.expanduser("~/.config/roku-remote/shortcuts.json")
 PORT = 8060
 
 ALIASES = {
@@ -61,18 +62,37 @@ def load():
             "devices": {ip: name for ip, name in devices.items() if isinstance(name, str)}}
 
 
-def save(c):
-    directory = os.path.dirname(CACHE)
+def save_json(destination, c):
+    directory = os.path.dirname(destination)
     os.makedirs(directory, exist_ok=True)
     path = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as f:
             path = f.name
             json.dump(c, f, indent=2)
-        os.replace(path, CACHE)
+        os.replace(path, destination)
     finally:
         if path and os.path.exists(path):
             os.unlink(path)
+
+
+def save(c):
+    save_json(CACHE, c)
+
+
+def preferences():
+    try:
+        with open(PREFERENCES) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def valid_shortcuts(value):
+    return (isinstance(value, list) and len(value) == 4 and
+            all(isinstance(a, dict) and isinstance(a.get("id"), str) and a["id"] and
+                isinstance(a.get("name"), str) and a["name"] for a in value))
 
 
 def local_net():
@@ -185,6 +205,18 @@ def main(argv):
         sys.exit("roku: launch requires an app name or id")
     ip = resolve(dev, pick_first=(cmd == "info"))
 
+    if cmd == "shortcuts":
+        try:
+            selection = json.loads(rest[0]) if len(rest) == 1 else None
+        except ValueError:
+            selection = None
+        if not valid_shortcuts(selection):
+            sys.exit("roku: shortcuts requires four app objects with id and name")
+        data = preferences()
+        data[ip] = [{"id": a["id"], "name": a["name"]} for a in selection]
+        save_json(PREFERENCES, data)
+        print(json.dumps(data[ip]))
+        return
     if cmd == "type":
         for ch in " ".join(rest):
             post(ip, "/keypress/Lit_" + urllib.parse.quote(ch, safe=""))
@@ -204,9 +236,11 @@ def main(argv):
         print(f"launched {hits[0][1]}")
     elif cmd == "info":
         c = load()
+        saved = preferences().get(ip, [])
         result = {
             "ip": ip, "name": c["devices"].get(ip, ip), "power": "", "app": "",
             "apps": [], "limited": False, "unreachable": False,
+            "shortcuts": saved if valid_shortcuts(saved) else [],
             "default": c.get("default"),
             "devices": [{"ip": i, "name": n} for i, n in c["devices"].items()],
         }

@@ -1,6 +1,6 @@
 I made a Roku remote plugin for Omarchy!
 
-It floats on your desktop and looks like the hardware remote: purple D-pad, side volume rocker, and four app shortcuts. Use your mouse or keyboard, type into your TV’s on-screen keyboard, and switch between multiple Rokus. It refreshes TV status automatically and includes a Rescan button.
+It floats on your desktop and looks like the hardware remote: purple D-pad, side volume rocker, and four customizable app shortcuts. Use your mouse or keyboard, type into your TV’s on-screen keyboard, and switch between multiple Rokus. It refreshes TV status automatically and includes a Rescan button.
 
 Made by **thediamondsaint**. Free and open source; connects directly to your Roku over your local network.
 

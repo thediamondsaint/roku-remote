@@ -6,7 +6,7 @@ const qml = readFileSync(new URL('../Remote.qml', `file://${__filename}`), 'utf8
 function setup() {
   const root = {opened: true, generation: 1, infoGeneration: 1, ip: 'A', devices: [{ip:'A',name:'Living'}, {ip:'B',name:'Bedroom'}], apps: [], pinned: [], fallbackApps: []};
   const infoProc = {running:false};
-  const context = vm.createContext({root, infoProc, scanProc:{running:false}, Qt:{callLater:fn=>fn()}, keyCatcher:{forceActiveFocus(){}}, XMLHttpRequest: function() {}});
+  const context = vm.createContext({root, infoProc, scanProc:{running:false}, shortcutProc:{running:false}, Qt:{callLater:fn=>fn()}, keyCatcher:{forceActiveFocus(){}}, XMLHttpRequest: function() {}});
   const functions = [...qml.matchAll(/^  function \w+\([^\n]*\) \{[\s\S]*?^  \}/gm)].map(m=>m[0]).join('\n');
   vm.runInContext(functions, context);
   for (const name of ['refresh','sortApps','selectDevice','applyInfo','open','cycleDevice']) root[name]=context[name];

@@ -16,6 +16,7 @@ class RokuTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.roku = runpy.run_path(str(Path(__file__).parents[1] / 'bin/roku'))
         self.g = self.roku['main'].__globals__
+        self.g['PREFERENCES'] = str(Path(self.temp.name) / 'prefs' / 'shortcuts.json')
         self.g['CACHE'] = str(Path(self.temp.name) / 'roku.json')
 
     def cache(self, value):
@@ -65,6 +66,20 @@ class RokuTests(unittest.TestCase):
     def test_empty_launch_is_rejected_before_network(self):
         with self.assertRaisesRegex(SystemExit, 'requires an app'):
             self.roku['main'](['launch'])
+
+    def test_shortcuts_are_saved_per_tv_without_network(self):
+        selected = [{"id": str(i), "name": f"App {i}"} for i in range(4)]
+        with patch.dict(self.g, discover=lambda: self.fail("unexpected discovery")), contextlib.redirect_stdout(io.StringIO()):
+            self.roku['main'](['-d', '192.168.1.50', 'shortcuts', json.dumps(selected)])
+            self.roku['main'](['-d', '192.168.1.51', 'shortcuts', json.dumps(list(reversed(selected)))])
+        self.assertEqual(self.roku['preferences']()['192.168.1.50'], selected)
+        self.assertEqual(self.roku['preferences']()['192.168.1.51'], list(reversed(selected)))
+
+    def test_invalid_shortcuts_do_not_write_preferences(self):
+        for value in ([], [{"id": "1", "name": "Netflix"}] * 3, [None] * 4):
+            with self.assertRaises(SystemExit):
+                self.roku['main'](['-d', '192.168.1.50', 'shortcuts', json.dumps(value)])
+        self.assertFalse(Path(self.g['PREFERENCES']).exists())
 
 
 if __name__ == '__main__':

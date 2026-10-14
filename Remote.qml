@@ -33,6 +33,11 @@ Item {
   property string notice: ""
   property var devices: []
   property var apps: []
+  property var savedShortcuts: []
+  property bool editingShortcuts: false
+  property var draftShortcuts: []
+  property int saveGeneration: -1
+  readonly property var quickApps: savedShortcuts.length === 4 ? savedShortcuts : apps.slice(0, 4)
 
   // Bundled CLI next to this file (bin/roku); falls back to ~/.local/bin/roku.
   readonly property string rokuBin: {
@@ -67,6 +72,8 @@ Item {
     root.ip = ""
     root.deviceName = ""
     root.apps = []
+    root.savedShortcuts = []
+    root.editingShortcuts = false
     root.power = ""
     root.activeApp = ""
     root.limited = false
@@ -92,7 +99,7 @@ Item {
 
   // ---- device info ---------------------------------------------------------
   function refresh() {
-    if (!root.opened || infoProc.running || root.scanning) return
+    if (!root.opened || infoProc.running || root.scanning || shortcutProc.running) return
     root.infoGeneration = root.generation
     infoProc.command = root.ip ? [root.rokuBin, "-d", root.ip, "info"] : [root.rokuBin, "info"]
     infoProc.running = true
@@ -133,6 +140,28 @@ Item {
     root.defaultIp = d.default || ""
     var listed = d.apps && d.apps.length > 0
     root.apps = root.sortApps(listed ? d.apps : root.fallbackApps)
+    if (!shortcutProc.running) root.savedShortcuts = d.shortcuts || []
+  }
+
+  function editShortcuts() {
+    if (!root.ip || root.quickApps.length !== 4 || shortcutProc.running) return
+    root.draftShortcuts = root.quickApps.slice()
+    root.pickerOpen = false
+    root.editingShortcuts = true
+  }
+
+  function chooseShortcut(slot, app) {
+    var draft = root.draftShortcuts.slice()
+    draft[slot] = app
+    root.draftShortcuts = draft
+  }
+
+  function saveShortcuts() {
+    if (shortcutProc.running || root.draftShortcuts.length !== 4) return
+    root.generation++
+    root.saveGeneration = root.generation
+    shortcutProc.command = [root.rokuBin, "-d", root.ip, "shortcuts", JSON.stringify(root.draftShortcuts)]
+    shortcutProc.running = true
   }
 
   function togglePicker() {
@@ -152,6 +181,8 @@ Item {
     root.generation++
     root.ip = ip
     root.apps = []
+    root.savedShortcuts = []
+    root.editingShortcuts = false
     root.limited = false
     root.unreachable = false
     root.power = ""
@@ -211,6 +242,11 @@ Item {
     var rep = event.isAutoRepeat
     if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return false
 
+    if (root.editingShortcuts) {
+      if (k === Qt.Key_Escape && !shortcutProc.running) root.editingShortcuts = false
+      return true
+    }
+
     if (root.typing) {
       if (k === Qt.Key_Escape) { root.typing = false; return true }
       if (k === Qt.Key_Backspace) { root.typed = root.typed.slice(0, -1); root.press("Backspace"); return true }
@@ -259,11 +295,32 @@ Item {
     if (t === "m") { root.press("VolumeMute"); return true }
     if (t === "p") { root.togglePower(); return true }
     if (t === "t" || t === "/") { root.typing = true; root.typed = ""; return true }
-    if (t >= "1" && t <= "9") { root.launch(root.apps[Number(t) - 1]); return true }
+    if (t >= "1" && t <= "9") { root.launch(Number(t) <= 4 ? root.quickApps[Number(t) - 1] : root.apps[Number(t) - 1]); return true }
     return true
   }
 
   Timer { interval: 5000; repeat: true; running: root.opened; onTriggered: root.refresh() }
+  Process {
+    id: shortcutProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (root.saveGeneration !== root.generation || !text.trim()) return
+        try {
+          root.savedShortcuts = JSON.parse(text)
+          root.editingShortcuts = false
+          root.notice = "Shortcuts saved"
+          noticeTimer.restart()
+          keyCatcher.forceActiveFocus()
+        } catch (e) { root.notice = "Couldn't save shortcuts"; noticeTimer.restart() }
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: if (text.trim() && root.saveGeneration === root.generation) {
+        root.notice = "Couldn't save shortcuts. Please try again."
+        noticeTimer.restart()
+      }
+    }
+  }
   Process {
     id: scanProc
     command: [root.rokuBin, "list"]
@@ -522,6 +579,54 @@ Item {
         RBtn { width: Style.space(25); height: Style.space(32); cmd: "VolumeMute"; icon: root.glyph(0xF0581); fontPx: Style.space(15); hint: "Mute (m)"; onActivated: root.press("VolumeMute") }
       }
 
+      Rectangle {
+        z: 20
+        anchors.fill: parent
+        radius: card.radius
+        color: "#f0202024"
+        visible: root.editingShortcuts
+        MouseArea { anchors.fill: parent }
+        Column {
+          anchors.centerIn: parent
+          width: parent.width - root.pad * 2
+          spacing: Style.space(12)
+          Text {
+            width: parent.width; wrapMode: Text.WordWrap
+            text: "Customize shortcuts"
+            color: root.glyphColor; font.family: Style.font.family; font.bold: true
+          }
+          Text {
+            width: parent.width; wrapMode: Text.WordWrap
+            text: "Choose the four apps for " + root.deviceName + ". Keys 1–4 follow this order."
+            color: "#b6b1be"; font.family: Style.font.family; font.pixelSize: Style.space(11)
+          }
+          Repeater {
+            model: root.draftShortcuts
+            delegate: Column {
+              required property int index
+              required property var modelData
+              width: parent.width
+              Text { text: "Button " + (parent.index + 1); color: "#b6a1c8"; font.pixelSize: Style.space(11) }
+              ComboBox {
+                width: parent.width
+                model: root.apps
+                textRole: "name"
+                enabled: !shortcutProc.running
+                currentIndex: {
+                  for (var i = 0; i < root.apps.length; i++)
+                    if (root.apps[i].id === parent.modelData.id) return i
+                  return -1
+                }
+                displayText: parent.modelData.name
+                onActivated: function(i) { root.chooseShortcut(parent.index, root.apps[i]) }
+              }
+            }
+          }
+          Button { width: parent.width; text: shortcutProc.running ? "Saving…" : "Save shortcuts"; enabled: !shortcutProc.running; onClicked: root.saveShortcuts() }
+          Button { width: parent.width; text: "Cancel"; enabled: !shortcutProc.running; onClicked: { root.editingShortcuts = false; keyCatcher.forceActiveFocus() } }
+        }
+      }
+
       // Click anywhere else to dismiss the TV list
       MouseArea {
         z: 9
@@ -778,7 +883,7 @@ Item {
           columns: 2
           spacing: Style.space(9)
           Repeater {
-            model: root.apps.slice(0, 4)
+            model: root.quickApps
             delegate: Item {
               id: appBtn
               required property int index
@@ -814,15 +919,29 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: { root.launch(appBtn.modelData); keyCatcher.forceActiveFocus() }
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onClicked: function(mouse) {
+                  if (mouse.button === Qt.RightButton) root.editShortcuts()
+                  else { root.launch(appBtn.modelData); keyCatcher.forceActiveFocus() }
+                }
+                onPressAndHold: root.editShortcuts()
               }
               ToolTip.visible: am2.containsMouse
-              ToolTip.text: appBtn.modelData.name + " (" + (appBtn.index + 1) + ")"
+              ToolTip.text: appBtn.modelData.name + " (" + (appBtn.index + 1) + ") · Right-click to customize"
               ToolTip.delay: 500
             }
           }
         }
 
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          text: "Edit shortcuts"
+          color: "#b6a1c8"
+          font.family: Style.font.family
+          font.pixelSize: Style.space(10)
+          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.editShortcuts() }
+        }
         Text {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
@@ -843,7 +962,7 @@ Item {
           onLinkActivated: function(link) { Qt.openUrlExternally(link) }
           MouseArea { id: creditHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton; cursorShape: Qt.PointingHandCursor }
           ToolTip.visible: creditHover.containsMouse
-          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.2.0\nView source, installation instructions, and issues on GitHub"
+          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.3.0\nView source, installation instructions, and issues on GitHub"
           ToolTip.delay: 400
         }
         Text {

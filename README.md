@@ -49,6 +49,14 @@ cached in `~/.cache/roku.json`. Click the TV name and choose **Rescan TVs**, pre
 The remote refreshes status every five seconds while open. A scan preserves your default even if the TV is offline.
 Explicit IP addresses bypass discovery, including devices outside the scanned subnet.
 
+## Customize app shortcuts
+
+Click **Edit shortcuts** beneath the four app buttons, or right-click a button.
+Choose an app for each position and click **Save shortcuts**. The selection is saved
+separately for each TV in `~/.config/roku-remote/shortcuts.json`, survives restarts,
+and controls both the bottom buttons and keyboard keys `1`–`4`.
+In Limited mode, the chooser uses the built-in app list until the TV allows app queries.
+
 ## Keys
 
 | Key | Action | Key | Action |
