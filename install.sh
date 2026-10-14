@@ -6,7 +6,19 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 mkdir -p "$HOME/.local/bin"
 ln -sf "$here/bin/roku" "$HOME/.local/bin/roku"
-echo "Linked: ~/.local/bin/roku -> $here/bin/roku"
+ln -sf "$here/bin/roku-inventory" "$HOME/.local/bin/roku-inventory"
+mkdir -p "$HOME/.local/share/applications"
+cat > "$HOME/.local/share/applications/roku-inventory.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Roku Inventory
+Comment=Browse Roku devices, apps, and playback details on your local network
+Exec="$HOME/.local/bin/roku-inventory"
+Icon=video-display
+Terminal=false
+Categories=Utility;Network;
+EOF
+echo "Installed Roku CLI, inventory viewer, and Roku Inventory launcher"
 echo
 echo "Add the window rule and keybinds from:"
 echo "  $here/extras/hyprland.lua"

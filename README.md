@@ -85,6 +85,16 @@ roku default NAME             remember the default TV
 
 Repeat a key with `KEY*N`, e.g. `roku down*5 select`. `NAME` is part of a device name or an IP address.
 
+## Inventory viewer
+
+Run `roku inventory-ui` or `bin/roku-inventory` for the native desktop viewer.
+Requires GTK 4 and PyGObject (`python-gobject` on Arch/Omarchy).
+Search TVs by name, IP, or model. Select one to see **Overview**, **Apps & inputs**,
+**Playback**, and **All fields**. Apps have their own search box. **Rescan network**
+refreshes the report in the background; **Export JSON** saves the complete data.
+The latest scan is cached locally in `~/.cache/roku-inventory.json`.
+To open a saved report, use `bin/roku-inventory /path/to/report.json`.
+
 ## Network inventory
 
 ```bash

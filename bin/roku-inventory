@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""Native, read-only Roku inventory viewer. Optional argument: a JSON report path."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+
+CACHE = Path.home() / '.cache/roku-inventory.json'
+CLI = Path(__file__).resolve().with_name('roku')
+
+
+def fields(node):
+    return {c['tag']: c.get('text', '') for c in node.get('children', [])}
+
+
+def readable(value):
+    return {'true': 'Yes', 'false': 'No'}.get(value, value or 'Not reported')
+
+
+def flatten(node, prefix=''):
+    name = prefix + node['tag']
+    rows = [(name, node['text'])] if node.get('text') else []
+    rows += [(name + ' / ' + key, value) for key, value in node.get('attributes', {}).items()]
+    for child in node.get('children', []):
+        rows.extend(flatten(child, name + ' / '))
+    return rows
+
+
+def validate_report(data):
+    if not isinstance(data, list) or not all(isinstance(d, dict) and
+        isinstance(d.get('ip'), str) and isinstance(d.get('name'), str) and
+        isinstance(d.get('queries'), dict) and isinstance(d.get('errors'), dict) for d in data):
+        raise ValueError('Not a Roku inventory report')
+    return data
+
+
+def main():
+    import gi
+    gi.require_version('Gtk', '4.0')
+    from gi.repository import Gtk, GLib, Gio, Gdk
+
+    def label(text, title=False):
+        widget = Gtk.Label(label=str(text), xalign=0)
+        widget.set_wrap(True)
+        widget.set_selectable(True)
+        if title:
+            widget.add_css_class('heading')
+        return widget
+
+    def box(spacing=12):
+        return Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=spacing)
+
+    def scroll(child):
+        widget = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        widget.set_child(child)
+        return widget
+
+    def table(rows):
+        grid = Gtk.Grid(column_spacing=24, row_spacing=10)
+        for i, (key, value) in enumerate(rows):
+            left = label(key.replace('-', ' ').capitalize())
+            left.add_css_class('dim-label')
+            right = label(readable(str(value)))
+            right.set_hexpand(True)
+            grid.attach(left, 0, i, 1, 1)
+            grid.attach(right, 1, i, 1, 1)
+        return grid
+
+    class Viewer(Gtk.Application):
+        def __init__(self):
+            super().__init__(application_id='io.github.thediamondsaint.RokuInventory', flags=Gio.ApplicationFlags.NON_UNIQUE)
+            self.report = []
+            self.selected_ip = None
+            self.connect('activate', self.activate)
+
+        def activate(self, app):
+            self.window = Gtk.ApplicationWindow(application=app, title='Roku Inventory')
+            self.window.set_default_size(1000, 740)
+            header = Gtk.HeaderBar()
+            header.set_title_widget(label('Roku Inventory', True))
+            self.scan_button = Gtk.Button(label='Rescan network')
+            self.scan_button.connect('clicked', lambda *_: self.scan())
+            header.pack_start(self.scan_button)
+            self.export_button = Gtk.Button(label='Export JSON')
+            self.export_button.connect('clicked', self.export)
+            header.pack_end(self.export_button)
+            self.window.set_titlebar(header)
+            layout = box()
+            for side in ('top', 'bottom', 'start', 'end'):
+                getattr(layout, 'set_margin_' + side)(18)
+            self.status = label('Read-only inventory • no playback or power commands')
+            layout.append(self.status)
+            pane = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, wide_handle=True)
+            pane.set_position(290)
+            pane.set_vexpand(True)
+            sidebar = box()
+            self.search = Gtk.SearchEntry(placeholder_text='Search TVs, IPs, or models')
+            self.search.connect('search-changed', lambda *_: self.populate())
+            sidebar.append(self.search)
+            self.devices = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
+            self.devices.connect('row-selected', self.select)
+            sidebar.append(scroll(self.devices))
+            pane.set_start_child(sidebar)
+            self.details = box()
+            self.details.set_margin_start(20)
+            pane.set_end_child(self.details)
+            layout.append(pane)
+            credit = label('Made by thediamondsaint • scans the default interface’s local subnet, capped at /24')
+            credit.add_css_class('dim-label')
+            layout.append(credit)
+            self.window.set_child(layout)
+            self.window.present()
+            path = Path(sys.argv[1]) if len(sys.argv) > 1 else CACHE
+            if path.exists():
+                try:
+                    self.report = validate_report(json.loads(path.read_text()))
+                    self.status.set_text(f'{len(self.report)} devices • saved report: {path.name} • Rescan for current status')
+                    self.populate()
+                except (ValueError, OSError, KeyError) as e:
+                    self.status.set_text(f'Could not load report: {e}')
+            elif len(sys.argv) > 1:
+                self.status.set_text('Report file not found. Rescan to discover your TVs.')
+            else:
+                self.scan()
+
+        def clear(self, widget):
+            while widget.get_first_child():
+                widget.remove(widget.get_first_child())
+
+        def populate(self):
+            self.clear(self.devices)
+            query = self.search.get_text().casefold()
+            selected = None
+            for d in self.report:
+                info = fields(d['queries'].get('device-info', {}))
+                if query not in (d['name'] + d['ip'] + info.get('model-name', '')).casefold():
+                    continue
+                row = Gtk.ListBoxRow()
+                row.device = d
+                content = box(5)
+                for side in ('top', 'bottom', 'start', 'end'):
+                    getattr(content, 'set_margin_' + side)(12)
+                content.append(label(d['name'], True))
+                content.append(label(d['ip'] + ' • ' + info.get('model-name', 'Unknown model')))
+                badge = label('Partial data' if d['errors'] else 'All four queries available')
+                badge.add_css_class('dim-label')
+                content.append(badge)
+                row.set_child(content)
+                self.devices.append(row)
+                if d['ip'] == self.selected_ip:
+                    selected = row
+            self.devices.select_row(selected or self.devices.get_row_at_index(0))
+
+        def select(self, _, row):
+            self.clear(self.details)
+            if not row:
+                self.details.append(label('No matching devices. Change your search or rescan.'))
+                return
+            d = row.device
+            self.selected_ip = d['ip']
+            self.details.append(label(d['name'], True))
+            self.details.append(label(d['ip']))
+            if d['errors']:
+                message = 'Some queries are unavailable. '
+                if any('403' in e for e in d['errors'].values()):
+                    message += 'The TV refused access. Check Control by mobile apps → Network access on that TV. '
+                message += '\n' + '\n'.join(f'{k}: {v}' for k, v in d['errors'].items())
+                self.details.append(label(message))
+            tabs = Gtk.Notebook(vexpand=True)
+            self.details.append(tabs)
+            info = fields(d['queries'].get('device-info', {}))
+            active = d['queries'].get('active-app', {}).get('children', [])
+            summary = [('Device type', 'Roku TV' if info.get('is-tv') == 'true' else 'Roku player'),
+                       ('Model', info.get('model-name', '')), ('Manufacturer', info.get('vendor-name', '')),
+                       ('Roku OS', info.get('software-version', '')), ('Power', info.get('power-mode', '')),
+                       ('Current app / input', active[0].get('text', '') if active else ''),
+                       ('Network', info.get('network-type', '')), ('Wi-Fi network', info.get('network-name', '')),
+                       ('Screen size', info.get('screen-size', '')), ('Resolution', info.get('ui-resolution', ''))]
+            tabs.append_page(scroll(table(summary)), Gtk.Label(label='Overview'))
+            applications = box()
+            app_search = Gtk.SearchEntry(placeholder_text='Search apps and inputs')
+            applications.append(app_search)
+            app_rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+            apps = d['queries'].get('apps', {}).get('children', [])
+            def show_apps(*_):
+                self.clear(app_rows)
+                query = app_search.get_text().casefold()
+                for entry in sorted(apps, key=lambda a: a.get('text', '').casefold()):
+                    attrs = entry.get('attributes', {})
+                    name = entry.get('text', '')
+                    if query not in (name + attrs.get('id', '')).casefold():
+                        continue
+                    content = box(4)
+                    content.set_margin_top(8)
+                    content.set_margin_bottom(8)
+                    content.append(label(name, True))
+                    content.append(label(f"ID: {attrs.get('id', '')}   Version: {attrs.get('version', '')}   Type: {attrs.get('type', '')}"))
+                    app_rows.append(content)
+            app_search.connect('search-changed', show_apps)
+            show_apps()
+            if not apps:
+                applications.append(label('App list unavailable or empty. See query status above.'))
+            applications.append(scroll(app_rows))
+            tabs.append_page(applications, Gtk.Label(label=f'Apps & inputs ({len(apps)})'))
+            playback = flatten(d['queries']['media-player']) if 'media-player' in d['queries'] else [('Playback', 'Not available')]
+            tabs.append_page(scroll(table(playback)), Gtk.Label(label='Playback'))
+            all_fields = []
+            for node in d['queries'].values():
+                all_fields.extend(flatten(node))
+            tabs.append_page(scroll(table(all_fields)), Gtk.Label(label='All fields'))
+
+        def scan(self):
+            self.scan_button.set_sensitive(False)
+            self.status.set_text('Scanning your local network… Existing results remain available.')
+            def worker():
+                try:
+                    process = subprocess.run([str(CLI), 'inventory', '--json'], capture_output=True, text=True, timeout=180)
+                    if process.returncode:
+                        raise ValueError(process.stderr.strip() or 'Scanner failed')
+                    report = validate_report(json.loads(process.stdout))
+                    CACHE.parent.mkdir(parents=True, exist_ok=True)
+                    with tempfile.NamedTemporaryFile(mode='w', dir=CACHE.parent, delete=False) as f:
+                        temporary = f.name
+                        json.dump(report, f, indent=2)
+                    try:
+                        os.replace(temporary, CACHE)
+                    finally:
+                        if os.path.exists(temporary):
+                            os.unlink(temporary)
+                    GLib.idle_add(self.scanned, report, None)
+                except (ValueError, OSError, subprocess.TimeoutExpired) as e:
+                    GLib.idle_add(self.scanned, None, str(e))
+            threading.Thread(target=worker, daemon=True).start()
+
+        def scanned(self, report, error):
+            self.scan_button.set_sensitive(True)
+            if error:
+                self.status.set_text('Scan failed: ' + error)
+            else:
+                self.report = report
+                partial = sum(bool(d['errors']) for d in report)
+                self.status.set_text(f'{len(report)} devices • {partial} with partial data • updated just now')
+                self.populate()
+            return False
+
+        def export(self, *_):
+            chooser = Gtk.FileChooserNative(title='Export Roku inventory', transient_for=self.window,
+                action=Gtk.FileChooserAction.SAVE, accept_label='Save', cancel_label='Cancel')
+            chooser.set_current_name('roku-inventory.json')
+            def response(dialog, result):
+                if result == Gtk.ResponseType.ACCEPT:
+                    try:
+                        path = dialog.get_file().get_path()
+                        Path(path).write_text(json.dumps(self.report, indent=2))
+                        os.chmod(path, 0o600)
+                        self.status.set_text('Report exported. It includes private device identifiers.')
+                    except OSError as e:
+                        self.status.set_text('Export failed: ' + str(e))
+                dialog.destroy()
+            chooser.connect('response', response)
+            chooser.show()
+
+    Viewer().run([sys.argv[0]])
+
+
+if __name__ == '__main__':
+    main()

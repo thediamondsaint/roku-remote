@@ -962,7 +962,7 @@ Item {
           onLinkActivated: function(link) { Qt.openUrlExternally(link) }
           MouseArea { id: creditHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton; cursorShape: Qt.PointingHandCursor }
           ToolTip.visible: creditHover.containsMouse
-          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.3.1\nView source, installation instructions, and issues on GitHub"
+          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.4.0\nView source, installation instructions, and issues on GitHub"
           ToolTip.delay: 400
         }
         Text {

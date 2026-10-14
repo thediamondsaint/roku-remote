@@ -198,6 +198,8 @@ def inventory_device(device):
             result["queries"][endpoint] = xml_data(get(ip, "/query/" + endpoint))
         except (urllib.error.URLError, OSError, ET.ParseError) as e:
             result["errors"][endpoint] = str(e)
+            if isinstance(e, urllib.error.HTTPError):
+                e.close()
     return result
 
 
@@ -238,6 +240,10 @@ def main(argv):
 
     cmd, rest = argv[0].lower(), argv[1:]
 
+    if cmd == "inventory-ui":
+        viewer = os.path.join(os.path.dirname(os.path.realpath(__file__)), "roku-inventory")
+        subprocess.Popen([viewer] + rest)
+        return
     if cmd == "inventory":
         if rest not in ([], ["--json"]):
             sys.exit("roku: inventory accepts only --json")
