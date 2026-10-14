@@ -99,6 +99,19 @@ class RokuTests(unittest.TestCase):
                         inventory_device=lambda device: {"ip": device[0]}):
             self.assertEqual(self.roku['inventory']('192.168.1.50'), [{"ip": '192.168.1.50'}])
 
+    def test_forbidden_queries_retry_authenticated_transport(self):
+        error = urllib.error.HTTPError('http://tv/query/apps', 403, 'Forbidden', {}, None)
+        response = {'content-data': 'PGFwcHM+PGFwcCBpZD0iMTIiPk5ldGZsaXg8L2FwcD48L2FwcHM+'}
+        with patch('urllib.request.urlopen', side_effect=error), patch.dict(self.g, ecp_request=lambda ip, path: response):
+            self.assertEqual(self.roku['apps']('192.168.1.50'), [('12', 'Netflix')])
+
+    def test_forbidden_controls_retry_authenticated_transport(self):
+        calls = []
+        error = urllib.error.HTTPError('http://tv/keypress/PowerOn', 403, 'Forbidden', {}, None)
+        with patch('urllib.request.urlopen', side_effect=error), patch.dict(self.g, ecp_request=lambda ip, path: calls.append((ip,path))):
+            self.roku['post']('192.168.1.50', '/keypress/PowerOn')
+        self.assertEqual(calls, [('192.168.1.50','/keypress/PowerOn')])
+
 
 if __name__ == '__main__':
     unittest.main()

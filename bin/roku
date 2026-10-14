@@ -15,6 +15,7 @@
 Repeat a key with KEY*N, e.g. `roku down*5 select`.
 NAME is a case-insensitive substring of the device name, or an IP address.
 """
+import base64
 import concurrent.futures as cf
 import ipaddress
 import json
@@ -166,13 +167,43 @@ def resolve(name, pick_first=False):
     return hits[0]
 
 
+def ecp_request(ip, path):
+    script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "roku-ecp.cjs")
+    try:
+        result = subprocess.run(["node", script, ip, path], capture_output=True, text=True, timeout=12)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or "ECP-2 request failed")
+        return json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        raise urllib.error.URLError(f"ECP-2: {e}") from e
+
+
 def post(ip, path):
     req = urllib.request.Request(f"http://{ip}:{PORT}{path}", data=b"", method="POST")
-    urllib.request.urlopen(req, timeout=3).read()
+    try:
+        with urllib.request.urlopen(req, timeout=3) as response:
+            response.read()
+    except urllib.error.HTTPError as e:
+        if e.code != 403:
+            raise
+        e.close()
+        ecp_request(ip, path)
 
 
 def get(ip, path):
-    return ET.fromstring(urllib.request.urlopen(f"http://{ip}:{PORT}{path}", timeout=3).read())
+    try:
+        with urllib.request.urlopen(f"http://{ip}:{PORT}{path}", timeout=3) as response:
+            return ET.fromstring(response.read())
+    except urllib.error.HTTPError as e:
+        if e.code != 403:
+            raise
+        try:
+            response = ecp_request(ip, path)
+            return ET.fromstring(base64.b64decode(response["content-data"], validate=True))
+        except (urllib.error.URLError, ValueError, KeyError):
+            raise e
+        finally:
+            e.close()
 
 
 def apps(ip):
@@ -240,6 +271,9 @@ def main(argv):
 
     cmd, rest = argv[0].lower(), argv[1:]
 
+    if cmd == "bridge":
+        script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "roku-ecp.cjs")
+        os.execvp("node", ["node", script, "--bridge"])
     if cmd == "inventory-ui":
         viewer = os.path.join(os.path.dirname(os.path.realpath(__file__)), "roku-inventory")
         subprocess.Popen([viewer] + rest)
@@ -350,8 +384,8 @@ if __name__ == "__main__":
         main(sys.argv[1:])
     except urllib.error.HTTPError as e:
         if e.code == 403:
-            sys.exit("roku: the TV refused the command (Limited mode). On the TV: Settings > System > "
-                     "Advanced system settings > Control by mobile apps > Network access > Permissive")
+            sys.exit("roku: the TV refused access. On the TV: Settings > System > "
+                     "Advanced system settings > Control by mobile apps > Network access > Enabled")
         sys.exit(f"roku: {e}")
     except (urllib.error.URLError, OSError) as e:
         sys.exit(f"roku: {e}")

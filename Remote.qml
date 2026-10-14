@@ -31,6 +31,11 @@ Item {
   property string activeApp: ""
   property string flashKey: ""
   property string notice: ""
+  property var bridgePending: ({})
+  property var bridgeQueue: []
+  property int bridgeSequence: 0
+  property bool bridgeReady: false
+  property string controlTransport: ""
   property var devices: []
   property var apps: []
   property var savedShortcuts: []
@@ -61,8 +66,8 @@ Item {
   readonly property color statusColor: unreachable ? "#ff5f5f" : limited ? "#f0a030"
                                      : power === "PowerOn" ? "#3ddc84" : "#77777f"
   readonly property string statusNote: unreachable ? "Can't reach this TV (is it on, and on the same network?)"
-    : limited ? "Limited mode: this TV ignores button presses. On the TV: Settings › System › Advanced system settings › Control by mobile apps › Network access › Permissive."
-    : ""
+    : limited ? "Network control was refused. On the TV: Settings › System › Advanced system settings › Control by mobile apps › Network access › Enabled."
+    : root.controlTransport === "ecp-2" ? "Connected using authenticated ECP-2" : ""
 
   function glyph(cp) { return String.fromCodePoint(cp) }
 
@@ -70,8 +75,13 @@ Item {
   function open(payloadJson) {
     root.generation++
     root.ip = ""
+    try {
+      var payload = JSON.parse(payloadJson || "{}")
+      if (payload.ip && /^\d+\.\d+\.\d+\.\d+$/.test(payload.ip)) root.ip = payload.ip
+    } catch (e) {}
     root.deviceName = ""
     root.apps = []
+    root.controlTransport = ""
     root.savedShortcuts = []
     root.editingShortcuts = false
     root.power = ""
@@ -86,9 +96,10 @@ Item {
     root.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function close() { root.opened = false }
+  function close() { root.opened = false; controlProc.running = false }
   function dismiss() {
     root.opened = false
+    controlProc.running = false
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "charles.roku-remote")
   }
@@ -181,6 +192,7 @@ Item {
     root.generation++
     root.ip = ip
     root.apps = []
+    root.controlTransport = ""
     root.savedShortcuts = []
     root.editingShortcuts = false
     root.limited = false
@@ -199,20 +211,43 @@ Item {
   }
 
   // ---- sending -------------------------------------------------------------
+  function flushBridge() {
+    if (!root.bridgeReady) return
+    var queue = root.bridgeQueue
+    root.bridgeQueue = []
+    for (var i = 0; i < queue.length; i++) controlProc.write(JSON.stringify(queue[i]) + "\n")
+  }
+
   function post(path, onDone) {
     if (!root.ip) return
-    var target = root.ip
-    var requestGeneration = root.generation
-    var x = new XMLHttpRequest()
-    x.onreadystatechange = function() {
-      if (x.readyState !== XMLHttpRequest.DONE || requestGeneration !== root.generation) return
-      if (x.status === 403) root.limited = true
-      else if (x.status === 0) root.unreachable = true
-      else if (x.status === 200) { root.unreachable = false; if (path.indexOf("/keypress/") === 0) root.limited = false }
-      if (onDone) onDone(x.status)
+    if (Object.keys(root.bridgePending).length >= 128) {
+      root.notice = "Waiting for TV commands…"
+      noticeTimer.restart()
+      return
     }
-    x.open("POST", "http://" + target + ":8060" + path)
-    x.send("")
+    var id = String(++root.bridgeSequence)
+    root.bridgePending[id] = { generation: root.generation, done: onDone }
+    root.bridgeQueue.push({id:id, ip:root.ip, path:path})
+    if (!controlProc.running) controlProc.running = true
+    root.flushBridge()
+  }
+
+  function applyControl(text) {
+    var result
+    try { result = JSON.parse(text) } catch (e) { return }
+    var pending = root.bridgePending[result.id]
+    delete root.bridgePending[result.id]
+    if (!pending || pending.generation !== root.generation) return
+    var status = result.status
+    if (status === 403) root.limited = true
+    else if (status === 0) root.unreachable = true
+    else if (status >= 200 && status < 300) {
+      root.unreachable = false
+      root.limited = false
+      root.controlTransport = result.transport || "http"
+    }
+    if (result.error) { root.notice = result.error; noticeTimer.restart() }
+    if (pending.done) pending.done(status)
   }
 
   function press(key) {
@@ -300,6 +335,20 @@ Item {
   }
 
   Timer { interval: 5000; repeat: true; running: root.opened; onTriggered: root.refresh() }
+  Process {
+    id: controlProc
+    command: [root.rokuBin, "bridge"]
+    stdinEnabled: true
+    onStarted: { root.bridgeReady = true; root.flushBridge() }
+    onExited: {
+      root.bridgeReady = false
+      root.bridgeQueue = []
+      root.bridgePending = ({})
+      if (root.opened) { root.notice = "Control connection stopped. Check Node.js 22 or newer is installed."; noticeTimer.restart() }
+    }
+    stdout: SplitParser { onRead: function(data) { root.applyControl(data) } }
+    stderr: StdioCollector { onStreamFinished: if (text.trim() && root.opened) { root.notice = text.trim(); noticeTimer.restart() } }
+  }
   Process {
     id: shortcutProc
     stdout: StdioCollector {
@@ -962,7 +1011,7 @@ Item {
           onLinkActivated: function(link) { Qt.openUrlExternally(link) }
           MouseArea { id: creditHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton; cursorShape: Qt.PointingHandCursor }
           ToolTip.visible: creditHover.containsMouse
-          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.4.0\nView source, installation instructions, and issues on GitHub"
+          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.5.0\nView source, installation instructions, and issues on GitHub"
           ToolTip.delay: 400
         }
         Text {

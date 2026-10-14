@@ -10,6 +10,6 @@ Install:
 ```bash
 omarchy plugin add https://github.com/thediamondsaint/roku-remote --enable --yes
 ```
-Follow the README to add the floating-window rule and Super+Alt+R keybind. On the TV, enable Network access → Permissive.
+Follow the README to add the floating-window rule and Super+Alt+R keybind. On the TV, enable Network access → Enabled.
 
 Attach `docs/screenshot.png` (rendered UI preview with example TV details).

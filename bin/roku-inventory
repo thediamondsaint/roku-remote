@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native, read-only Roku inventory viewer. Optional argument: a JSON report path."""
+"""Native Roku inventory and control viewer. Optional argument: a JSON report path."""
 import json
 import os
 from pathlib import Path
@@ -91,7 +91,7 @@ def main():
             layout = box()
             for side in ('top', 'bottom', 'start', 'end'):
                 getattr(layout, 'set_margin_' + side)(18)
-            self.status = label('Read-only inventory • no playback or power commands')
+            self.status = label('Inventory scans are read-only • controls act on the selected TV')
             layout.append(self.status)
             pane = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, wide_handle=True)
             pane.set_position(290)
@@ -163,6 +163,17 @@ def main():
             self.selected_ip = d['ip']
             self.details.append(label(d['name'], True))
             self.details.append(label(d['ip']))
+            controls = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6)
+            controls.set_max_children_per_line(7)
+            for title, command in [('Power on', 'poweron'), ('Power off', 'poweroff'), ('Home', 'home'),
+                                   ('Mute', 'mute'), ('Vol −', 'voldown'), ('Vol +', 'volup')]:
+                button = Gtk.Button(label=title)
+                button.connect('clicked', lambda b, command=command, ip=d['ip']: self.control(b, ip, [command]))
+                controls.append(button)
+            remote = Gtk.Button(label='Full remote')
+            remote.connect('clicked', lambda b, ip=d['ip']: self.control(b, ip, [], remote=True))
+            controls.append(remote)
+            self.details.append(controls)
             if d['errors']:
                 message = 'Some queries are unavailable. '
                 if any('403' in e for e in d['errors'].values()):
@@ -198,6 +209,10 @@ def main():
                     content.set_margin_bottom(8)
                     content.append(label(name, True))
                     content.append(label(f"ID: {attrs.get('id', '')}   Version: {attrs.get('version', '')}   Type: {attrs.get('type', '')}"))
+                    launch = Gtk.Button(label='Launch' if attrs.get('type') == 'appl' else 'Switch input')
+                    launch.set_halign(Gtk.Align.START)
+                    launch.connect('clicked', lambda b, app_id=attrs.get('id'), ip=d['ip']: self.control(b, ip, ['launch', app_id]))
+                    content.append(launch)
                     app_rows.append(content)
             app_search.connect('search-changed', show_apps)
             show_apps()
@@ -211,6 +226,27 @@ def main():
             for node in d['queries'].values():
                 all_fields.extend(flatten(node))
             tabs.append_page(scroll(table(all_fields)), Gtk.Label(label='All fields'))
+
+        def control(self, button, ip, arguments, remote=False):
+            button.set_sensitive(False)
+            self.status.set_text(f'Sending command to {ip}…')
+            def done(message):
+                button.set_sensitive(True)
+                self.status.set_text(message)
+                return False
+            def worker():
+                command = (['omarchy-shell', 'shell', 'summon', 'charles.roku-remote', json.dumps({'ip': ip})]
+                           if remote else [str(CLI), '-d', ip] + arguments)
+                try:
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+                    if result.returncode:
+                        message = f'{ip}: {result.stderr.strip() or "Command failed"}'
+                    else:
+                        message = f'{ip}: {"Remote opened" if remote else "Command accepted"}. Rescan to refresh status.'
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    message = f'{ip}: {e}'
+                GLib.idle_add(done, message)
+            threading.Thread(target=worker, daemon=True).start()
 
         def scan(self):
             self.scan_button.set_sensitive(False)

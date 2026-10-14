@@ -29,3 +29,18 @@ test('Tab clears the old TV status immediately',()=>{
  const {root}=setup(); root.power='PowerOn'; root.activeApp='Netflix'; root.cycleDevice();
  assert.equal(root.ip,'B'); assert.equal(root.deviceName,'Bedroom'); assert.equal(root.power,''); assert.equal(root.activeApp,'');
 });
+test('late authenticated control replies do not update another TV',()=>{
+ const {root,context}=setup();
+ let called=false;
+ root.bridgePending={one:{generation:0,done:()=>called=true}};
+ context.applyControl(JSON.stringify({id:'one',status:200,transport:'ecp-2'}));
+ assert.equal(called,false); assert.equal(root.bridgePending.one,undefined);
+});
+test('authenticated controls clear a prior restricted status',()=>{
+ const {root,context}=setup();
+ root.limited=true; root.unreachable=true;
+ root.bridgePending={one:{generation:1}};
+ context.applyControl(JSON.stringify({id:'one',status:200,transport:'ecp-2'}));
+ assert.equal(root.limited,false); assert.equal(root.unreachable,false);
+ assert.equal(root.controlTransport,'ecp-2');
+});

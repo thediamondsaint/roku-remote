@@ -13,11 +13,11 @@ A Roku remote that looks like a real one, as a floating window for [Omarchy](htt
 
 ## Requirements
 
-- Omarchy with the shell plugin system (`omarchy-shell`), Hyprland, `python3`
+- Omarchy with the shell plugin system (`omarchy-shell`), Hyprland, `python3`, Node.js 22 or newer
   (developed and tested on Hyprland 0.56 with a TCL Roku TV running Roku OS 15; other models should work but are untested)
 - A Roku on the same network, with **Settings > System > Advanced system settings > Control by
-  mobile apps > Network access** set to **Permissive** (the default "Limited" mode ignores button presses;
-  the remote shows an amber dot next to that TV's name if it detects this)
+  mobile apps > Network access** set to **Enabled** for the public HTTP API. The remote also tries authenticated ECP-2
+  when HTTP is refused; compatibility depends on the Roku firmware
 
 ## Install
 
@@ -90,7 +90,9 @@ Repeat a key with `KEY*N`, e.g. `roku down*5 select`. `NAME` is part of a device
 Run `roku inventory-ui` or `bin/roku-inventory` for the native desktop viewer.
 Requires GTK 4 and PyGObject (`python-gobject` on Arch/Omarchy).
 Search TVs by name, IP, or model. Select one to see **Overview**, **Apps & inputs**,
-**Playback**, and **All fields**. Apps have their own search box. **Rescan network**
+**Playback**, and **All fields**. Apps have their own search box and launch buttons.
+Use the selected TV’s power, volume, mute, and Home controls, or open **Full remote**.
+Controls use the same HTTP/ECP-2 fallback as the CLI. **Rescan network**
 refreshes the report in the background; **Export JSON** saves the complete data.
 The latest scan is cached locally in `~/.cache/roku-inventory.json`.
 To open a saved report, use `bin/roku-inventory /path/to/report.json`.
@@ -116,13 +118,22 @@ names are available through these queries.
 
 ## How it works
 
-The remote uses Roku's local External Control Protocol (HTTP on port 8060) - no cloud, no account. Discovery
+The remote uses Roku’s local External Control Protocol on port 8060: HTTP first,
+then authenticated ECP-2 WebSockets when HTTP returns 403. The desktop remote keeps
+an ECP-2 session open and sends commands in order. Device and app queries also try
+ECP-2 if HTTP refuses them. No cloud or Roku account login is involved.
+
+ECP-2 is an undocumented protocol and can change with firmware updates. The implementation
+was independently written from published protocol observations by
+[Scott Driggers](https://mr.scot/blog/how-i-built-roam/); no Roam source code is bundled.
+HTTP-only devices remain supported. If both transports fail, enable network control
+on the TV. Discovery
 scans your local subnet for Rokus. Colours are fixed (the Roku look), not taken from your Omarchy theme.
 
 ## Troubleshooting
 
-- **Amber dot next to the TV name / `403 Forbidden`:** that TV is in Limited mode and ignores button presses. Hover
-  the name for the fix: set Network access to Permissive on the TV (see above). You can still switch TVs.
+- **Amber dot next to the TV name / `403 Forbidden`:** the TV refused access over the available transports. Hover
+  the name for the fix: set Network access to Enabled on the TV (see above). You can still switch TVs.
 - **Red dot ("can't reach"):** the TV is off or on another network/VLAN.
 - **Nothing found:** click the TV name and choose **Rescan TVs**, or press `F5`.
 - **After editing `Remote.qml`:** run `omarchy restart shell` (plugin QML is cached).
@@ -140,6 +151,6 @@ MIT - see [LICENSE](LICENSE).
 ## Development
 
 Run `python3 -m unittest discover -s tests -v` for offline CLI regression tests and
-`node --test tests/remote.test.cjs` for the remote’s state transitions.
+`node --test tests/*.test.cjs` for the remote’s state transitions.
 Run `bash -n install.sh` to check installer syntax. Test the UI in Omarchy with a real Roku
 for power, typing, app launches, TV switching, and offline recovery.
