@@ -81,6 +81,24 @@ class RokuTests(unittest.TestCase):
                 self.roku['main'](['-d', '192.168.1.50', 'shortcuts', json.dumps(value)])
         self.assertFalse(Path(self.g['PREFERENCES']).exists())
 
+    def test_inventory_keeps_fields_and_continues_after_forbidden(self):
+        import xml.etree.ElementTree as ET
+        def query(ip, path):
+            if path == "/query/apps":
+                raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+            return ET.fromstring('<root state="play"><item id="1">One</item><item id="2">Two</item></root>')
+        with patch.dict(self.g, get=query, post=lambda *a: self.fail("inventory must not send controls")):
+            report = self.roku['inventory_device'](('192.168.1.50', 'Living'))
+        self.assertIn('apps', report['errors'])
+        self.assertIn('media-player', report['queries'])
+        self.assertEqual(report['queries']['device-info']['attributes']['state'], 'play')
+        self.assertEqual(len(report['queries']['device-info']['children']), 2)
+
+    def test_inventory_single_ip_does_not_scan(self):
+        with patch.dict(self.g, discover=lambda: self.fail("unexpected scan"),
+                        inventory_device=lambda device: {"ip": device[0]}):
+            self.assertEqual(self.roku['inventory']('192.168.1.50'), [{"ip": '192.168.1.50'}])
+
 
 if __name__ == '__main__':
     unittest.main()

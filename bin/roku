@@ -2,6 +2,7 @@
 """Control Roku devices over the local network (ECP, port 8060).
 
   roku list                     find Rokus on the LAN (cached)
+  roku [-d NAME] inventory [--json]  read device details, apps, and playback state
   roku [-d NAME] KEY...         send keys: home up down left right select back play
                                 rev fwd volup voldown mute power info replay ...
   roku [-d NAME] type "text"    type text into an on-screen keyboard
@@ -178,6 +179,55 @@ def apps(ip):
     return [(a.get("id"), a.text) for a in get(ip, "/query/apps").iter("app")]
 
 
+def xml_data(node):
+    """Keep every returned XML field, including attributes and repeated children."""
+    result = {"tag": node.tag, "attributes": dict(node.attrib)}
+    text = (node.text or "").strip()
+    if text:
+        result["text"] = text
+    if len(node):
+        result["children"] = [xml_data(child) for child in node]
+    return result
+
+
+def inventory_device(device):
+    ip, name = device
+    result = {"ip": ip, "name": name, "queries": {}, "errors": {}}
+    for endpoint in ("device-info", "apps", "active-app", "media-player"):
+        try:
+            result["queries"][endpoint] = xml_data(get(ip, "/query/" + endpoint))
+        except (urllib.error.URLError, OSError, ET.ParseError) as e:
+            result["errors"][endpoint] = str(e)
+    return result
+
+
+def inventory(dev=None):
+    if dev:
+        ip = resolve(dev)
+        devices = {ip: load()["devices"].get(ip, ip)}
+    else:
+        devices = discover()["devices"]
+    with cf.ThreadPoolExecutor(max_workers=8) as executor:
+        return list(executor.map(inventory_device, devices.items()))
+
+
+def print_inventory(report):
+    def lines(node, indent="  "):
+        attributes = " ".join(f"{k}={v}" for k, v in node["attributes"].items())
+        value = node.get("text", "")
+        print(f"{indent}{node['tag']}: {value}" + (f" [{attributes}]" if attributes else ""))
+        for child in node.get("children", []):
+            lines(child, indent + "  ")
+    if not report:
+        print("No Rokus found in the local discovery subnet.")
+    for device in report:
+        print(f"\n{device['name']} ({device['ip']})")
+        for node in device["queries"].values():
+            lines(node)
+        for endpoint, error in device["errors"].items():
+            print(f"  {endpoint}: unavailable ({error})")
+
+
 def main(argv):
     dev = None
     if argv[:1] in (["-d"], ["--device"]) and len(argv) > 2:
@@ -188,6 +238,15 @@ def main(argv):
 
     cmd, rest = argv[0].lower(), argv[1:]
 
+    if cmd == "inventory":
+        if rest not in ([], ["--json"]):
+            sys.exit("roku: inventory accepts only --json")
+        report = inventory(dev)
+        if rest:
+            print(json.dumps(report, indent=2))
+        else:
+            print_inventory(report)
+        return
     if cmd in ("list", "discover"):
         c = discover()
         for ip, n in c["devices"].items():

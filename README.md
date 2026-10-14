@@ -85,6 +85,25 @@ roku default NAME             remember the default TV
 
 Repeat a key with `KEY*N`, e.g. `roku down*5 select`. `NAME` is part of a device name or an IP address.
 
+## Network inventory
+
+```bash
+roku inventory                        # rescan and print every returned field
+roku inventory --json                 # structured report for all discovered Rokus
+roku -d 192.168.1.50 inventory --json  # query one IP without scanning
+```
+
+This read-only tool queries device information, installed apps, the active app, and
+media-player state. It preserves all returned XML fields and attributes, including
+model, software version, serial number, network identifiers, and capabilities when
+available. Blocked or unsupported endpoints are reported individually. It sends no
+power, keypress, or launch commands. Treat exported reports as private device inventory.
+
+Discovery covers the default interface’s local subnet, capped at its own `/24`.
+It cannot guarantee discovery of sleeping TVs, other VLANs, or devices outside that
+range; query their known IPs explicitly. No account passwords or reliable viewer
+names are available through these queries.
+
 ## How it works
 
 The remote uses Roku's local External Control Protocol (HTTP on port 8060) - no cloud, no account. Discovery
