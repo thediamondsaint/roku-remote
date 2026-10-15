@@ -11,6 +11,9 @@
   roku [-d NAME] apps           list installed apps
   roku [-d NAME] launch APP     launch an app by (partial) name or id (`roku netflix` works too)
   roku [-d NAME] status         power state / active app
+  roku [-d NAME] volume [0-100] read or set the exact TV volume
+  roku [-d NAME] yodel-nuke    volume 25 / YouTube for 25 seconds, then restore (all TVs by default)
+  roku [-d NAME] yodel-restore retry restoration after an interrupted Yodel Nuke
   roku [-d NAME] info           JSON: device, power, active app, apps (used by the GUI)
   roku default NAME             remember the default device
 
@@ -192,8 +195,7 @@ def probe(ip):
     finally:
         s.close()
     try:
-        x = urllib.request.urlopen(f"http://{ip}:{PORT}/query/device-info", timeout=2).read()
-        root = ET.fromstring(x)
+        root = get(str(ip), "/query/device-info")
         g = lambda t: (root.findtext(t) or "").strip()
         return str(ip), g("user-device-name") or g("friendly-device-name") or g("model-name"), {c.tag: (c.text or "").strip() for c in root}
     except Exception:
@@ -297,6 +299,44 @@ def get(ip, path):
 
 def apps(ip):
     return [(a.get("id"), a.text) for a in get(ip, "/query/apps").iter("app")]
+
+
+def volume(ip):
+    """Read the TV's global volume; never guess for unsupported devices."""
+    try:
+        value = int(get(ip, "/query/audio-device").findtext("global/volume"))
+    except (TypeError, ValueError, ET.ParseError) as e:
+        raise urllib.error.URLError("TV did not report a valid volume") from e
+    if not 0 <= value <= 100:
+        raise urllib.error.URLError("TV reported a volume outside 0-100")
+    return value
+
+
+def set_volume(ip, target, cancel=None):
+    current = volume(ip)
+    deadline = time.monotonic() + 60
+    for _ in range(100):
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Volume change cancelled")
+        if time.monotonic() > deadline:
+            raise urllib.error.URLError(f"Volume is {current}; target {target} timed out")
+        if current == target:
+            return current
+        previous = current
+        post(ip, "/keypress/VolumeUp" if current < target else "/keypress/VolumeDown")
+        # Wait for feedback before sending another key, including on slow TVs.
+        for _ in range(5):
+            time.sleep(0.15)
+            if cancel is not None and cancel.is_set():
+                raise InterruptedError("Volume change cancelled")
+            current = volume(ip)
+            if current != previous:
+                break
+        if current == previous:
+            raise urllib.error.URLError(f"Volume stopped responding at {current}; target {target} not confirmed")
+    if current == target:
+        return current
+    raise urllib.error.URLError(f"Volume is {current}; target {target} not reached")
 
 
 def xml_data(node):
@@ -423,6 +463,16 @@ def main(argv):
 
     cmd, rest = argv[0].lower(), argv[1:]
 
+    if cmd in ("yodel-nuke", "yodel-restore"):
+        if rest not in ([], ["--json"]):
+            sys.exit("roku: yodel-nuke / yodel-restore accept only --json")
+        import runpy
+        module = os.path.join(os.path.dirname(os.path.realpath(__file__)), "roku_yodel.py")
+        result = runpy.run_path(module)["run"](globals(), dev, restore=(cmd == "yodel-restore"), json_output=bool(rest))
+        if result:
+            sys.exit(result)
+        return
+
     if cmd == "remember":
         if len(rest) not in (2, 3) or not valid_ip(rest[1]):
             sys.exit("roku: remember NAME IP [MAC]")
@@ -479,8 +529,13 @@ def main(argv):
 
     if cmd == "launch" and not rest:
         sys.exit("roku: launch requires an app name or id")
+    if cmd == "volume" and rest and (len(rest) != 1 or not re.fullmatch(r"[0-9]{1,3}", rest[0]) or not 0 <= int(rest[0]) <= 100):
+        sys.exit("roku: volume accepts an integer from 0 to 100")
     ip = resolve(dev, pick_first=(cmd == "info"))
 
+    if cmd == "volume":
+        print(f"Volume: {set_volume(ip, int(rest[0])) if rest else volume(ip)}")
+        return
     if cmd == "wake":
         if wake_device(ip):
             print("TV responded after Wake-on-LAN")

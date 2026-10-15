@@ -38,6 +38,36 @@ class RokuTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'invalid IPv4'):
             self.roku['resolve']('999.1.1.1')
 
+    def test_volume_rejects_invalid_targets_before_network(self):
+        for args in (['-1'], ['101'], ['25.5'], ['loud'], ['25', '30']):
+            with patch.dict(self.g, resolve=lambda *a, **k: self.fail('unexpected network')), self.assertRaisesRegex(SystemExit, '0 to 100'):
+                self.roku['main'](['volume'] + args)
+
+    def test_volume_reads_global_level(self):
+        import xml.etree.ElementTree as ET
+        with patch.dict(self.g, get=lambda *a: ET.fromstring('<audio-device><global><volume>25</volume></global></audio-device>')):
+            self.assertEqual(self.roku['volume']('192.168.1.50'), 25)
+
+    def test_missing_or_invalid_volume_is_not_guessed(self):
+        import xml.etree.ElementTree as ET
+        for value in ('', 'loud', '101', '-1'):
+            with patch.dict(self.g, get=lambda *a: ET.fromstring(f'<audio-device><global><volume>{value}</volume></global></audio-device>')), self.assertRaises(urllib.error.URLError):
+                self.roku['volume']('192.168.1.50')
+
+    def test_exact_volume_adjusts_both_directions_and_verifies(self):
+        for readings, keys in (([23, 24, 25], ['VolumeUp'] * 2), ([27, 26, 25], ['VolumeDown'] * 2), ([25], []), ([24, 24, 25], ['VolumeUp'])):
+            levels = iter(readings)
+            sent = []
+            with patch.dict(self.g, volume=lambda ip: next(levels), post=lambda ip, path: sent.append(path)), patch('time.sleep'):
+                self.assertEqual(self.roku['set_volume']('192.168.1.50', 25), 25)
+            self.assertEqual(sent, ['/keypress/' + key for key in keys])
+
+    def test_stuck_volume_stops_after_one_key(self):
+        sent = []
+        with patch.dict(self.g, volume=lambda ip: 19, post=lambda ip, path: sent.append(path)), patch('time.sleep'), self.assertRaisesRegex(urllib.error.URLError, 'not confirmed'):
+            self.roku['set_volume']('192.168.1.50', 25)
+        self.assertEqual(sent, ['/keypress/VolumeUp'])
+
     def test_empty_scan_preserves_default(self):
         self.cache({'default': '192.168.1.50', 'devices': {}})
         with patch.dict(self.g, local_net=lambda: SimpleNamespace(hosts=lambda: [])):

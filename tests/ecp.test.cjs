@@ -10,6 +10,11 @@ test('key, Unicode typing, query, and launch paths map to ECP-2 commands', () =>
   assert.deepEqual(translate('/keypress/Lit_%E2%82%AC'), ['key-press', {'param-key':'Lit_€'}]);
   assert.deepEqual(translate('/launch/12'), ['launch', {'param-channel-id':'12'}]);
   assert.deepEqual(translate('/query/apps'), ['query-apps', {}]);
+  assert.deepEqual(translate('/query/audio-device'), ['query-audio-device', {}]);
+  assert.deepEqual(translate('/launch/837?contentId=8_UnANdDqJc&mediaType=movie&t=10'), ['launch', {
+    'param-channel-id':'837',
+    'param-params':JSON.stringify({contentId:'8_UnANdDqJc',mediaType:'movie',t:'10'})
+  }]);
   assert.throws(() => translate('/query/unknown'));
 });
 test('invalid targets are rejected', async () => {

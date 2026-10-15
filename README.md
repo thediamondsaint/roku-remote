@@ -10,6 +10,7 @@ A Roku remote that looks like a real one, as a floating window for [Omarchy](htt
 - Type into the TV's on-screen keyboard from your keyboard
 - Switch between several Rokus from a drop-down list (click the TV name, or press `d`)
 - Bundled `roku` command-line tool (`roku home`, `roku volup*3`, `roku netflix`, ...)
+- Exact volume control and a **Yodel Nuke** button for a temporary YouTube interruption on all TVs
 
 ## Requirements
 
@@ -80,10 +81,53 @@ roku [-d NAME] type "text"    type into an on-screen keyboard
 roku [-d NAME] apps           list installed apps
 roku [-d NAME] launch APP     launch an app (`roku netflix` works too)
 roku [-d NAME] status         power state / active app
+roku [-d NAME] volume         read current TV volume
+roku [-d NAME] volume 25      set and verify an exact volume (0–100)
+roku yodel-nuke              run the Yodel Nuke on all discovered TVs
+roku -d NAME yodel-nuke      run it on just one TV
+roku yodel-restore           retry any unfinished restorations
 roku default NAME             remember the default TV
 ```
 
 Repeat a key with `KEY*N`, e.g. `roku down*5 select`. `NAME` is part of a device name or an IP address.
+
+Click **Set** beneath the remote's mute button to enter an exact volume.
+For example, `roku -d "Living Room" volume 25` sets that TV to 25.
+The remote reads `/query/audio-device`, sends volume keys one at a time, and checks
+the reported level after each change. Success means the TV reported the target.
+Devices that cannot report a numeric volume cannot use exact volume; their normal
+volume buttons still work. Mute is left as reported by the TV; this command does not toggle it.
+
+## Yodel Nuke
+
+Click **Yodel Nuke** on the remote to run it on every discovered TV, regardless of
+which TV is selected. Each TV runs concurrently, with its own saved state and timer:
+
+1. Save its volume, mute state, and active app or input.
+2. Set volume to **25**, unmute, and launch [the Yodel video](https://youtu.be/8_UnANdDqJc?t=10) in YouTube.
+3. Wait up to 30 seconds for YouTube to report playback, then count **25 seconds**.
+4. Restore the original volume and mute state and reopen the previous app/input.
+
+The results panel shows progress, skipped TVs, and any errors. Closing the remote
+window lets the operation finish and restore the TVs. A second run is blocked while
+one is active. Ctrl+C or a normal process termination triggers restoration.
+
+Offline/standby TVs, Roku players without their own TV volume control (such as Roku
+Express), and TVs without YouTube are skipped or reported without launching the video.
+Discovery uses the local subnet, SSDP, and remembered devices; it cannot guarantee
+discovery across VLANs or of a never-seen device that is completely unresponsive.
+If a volume change or video launch fails, restoration is still attempted.
+
+**YouTube ads may count toward the timer.** Roku's playback report does not reliably
+distinguish an ad from the requested video. The 0:10 start is requested, but YouTube
+may ignore it. Reopening the previous app does not resume its exact video or position.
+When the previous app was YouTube, the temporary video is stopped before YouTube reopens.
+
+If a TV disconnects or the process is forcibly killed, its saved state remains in
+`~/.cache/roku-yodel/`. Use **Retry restoration** in the results panel or
+`roku yodel-restore` once the TV is reachable again. A new run will not overwrite a
+pending restore. `roku -d NAME yodel-restore` retries just one TV. Add `--json` to
+either command for line-by-line structured progress.
 
 ## Offline TVs and Wake-on-LAN
 

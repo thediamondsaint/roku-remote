@@ -6,7 +6,7 @@ const qml = readFileSync(new URL('../Remote.qml', `file://${__filename}`), 'utf8
 function setup() {
   const root = {opened: true, generation: 1, infoGeneration: 1, ip: 'A', devices: [{ip:'A',name:'Living'}, {ip:'B',name:'Bedroom'}], apps: [], pinned: [], fallbackApps: []};
   const infoProc = {running:false};
-  const context = vm.createContext({root, infoProc, scanProc:{running:false}, shortcutProc:{running:false}, Qt:{callLater:fn=>fn()}, keyCatcher:{forceActiveFocus(){}}, XMLHttpRequest: function() {}});
+  const context = vm.createContext({root, infoProc, yodelProc:{running:false}, scanProc:{running:false}, shortcutProc:{running:false}, Qt:{callLater:fn=>fn()}, keyCatcher:{forceActiveFocus(){}}, XMLHttpRequest: function() {}});
   const functions = [...qml.matchAll(/^  function \w+\([^\n]*\) \{[\s\S]*?^  \}/gm)].map(m=>m[0]).join('\n');
   vm.runInContext(functions, context);
   for (const name of ['refresh','sortApps','selectDevice','applyInfo','open','cycleDevice']) root[name]=context[name];
@@ -43,4 +43,23 @@ test('authenticated controls clear a prior restricted status',()=>{
  context.applyControl(JSON.stringify({id:'one',status:200,transport:'ecp-2'}));
  assert.equal(root.limited,false); assert.equal(root.unreachable,false);
  assert.equal(root.controlTransport,'ecp-2');
+});
+test('Yodel Nuke dispatches the network-wide command and ignores repeated clicks',()=>{
+ const {root,context}=setup(); root.rokuBin='/test/roku';
+ context.startYodel(false);
+ assert.deepEqual(Array.from(context.yodelProc.command), ['/test/roku','yodel-nuke','--json']);
+ assert.equal(context.yodelProc.running,true);
+ assert.equal(root.showingYodel,true);
+ root.yodelLog='existing progress';
+ context.startYodel(false);
+ assert.equal(root.yodelLog,'existing progress');
+});
+test('Yodel Nuke keeps restoration failures available across device switches',()=>{
+ const {root,context}=setup(); root.yodelLog='';
+ context.applyYodel(JSON.stringify({name:'TV',status:'error',message:'Restoration incomplete; run roku yodel-restore'}));
+ root.selectDevice('B');
+ assert.equal(root.yodelRecoveryNeeded,true);
+ assert.match(root.yodelLog,/TV: Restoration incomplete/);
+ context.startYodel(true);
+ assert.equal(context.yodelProc.command[1],'yodel-restore');
 });

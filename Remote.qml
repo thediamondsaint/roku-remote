@@ -31,6 +31,12 @@ Item {
   property string activeApp: ""
   property string flashKey: ""
   property string notice: ""
+  property bool editingVolume: false
+  property bool settingVolume: false
+  property string yodelLog: ""
+  property string yodelStatus: ""
+  property bool showingYodel: false
+  property bool yodelRecoveryNeeded: false
   property var bridgePending: ({})
   property var bridgeQueue: []
   property int bridgeSequence: 0
@@ -84,6 +90,7 @@ Item {
     root.controlTransport = ""
     root.savedShortcuts = []
     root.editingShortcuts = false
+    root.editingVolume = false
     root.power = ""
     root.activeApp = ""
     root.limited = false
@@ -195,6 +202,8 @@ Item {
     root.controlTransport = ""
     root.savedShortcuts = []
     root.editingShortcuts = false
+    root.editingVolume = false
+    root.settingVolume = false
     root.limited = false
     root.unreachable = false
     root.power = ""
@@ -220,6 +229,11 @@ Item {
 
   function post(path, onDone) {
     if (!root.ip) return
+    if (yodelProc.running) {
+      root.notice = "Yodel Nuke is running; TV controls resume after restoration"
+      noticeTimer.restart()
+      return
+    }
     if (Object.keys(root.bridgePending).length >= 128) {
       root.notice = "Waiting for TV commands…"
       noticeTimer.restart()
@@ -244,7 +258,7 @@ Item {
     else if (status >= 200 && status < 300) {
       root.unreachable = false
       root.limited = false
-      root.controlTransport = result.transport || "http"
+      if (result.transport !== "volume") root.controlTransport = result.transport || "http"
     }
     if (result.error) { root.notice = result.error; noticeTimer.restart() }
     if (pending.done) pending.done(status)
@@ -254,6 +268,36 @@ Item {
     root.flashKey = key
     flashTimer.restart()
     root.post("/keypress/" + key)
+  }
+
+  function setVolume(value) {
+    if (!Number.isInteger(value) || value < 0 || value > 100) return
+    if (!root.ip || yodelProc.running || root.settingVolume || Object.keys(root.bridgePending).length >= 128) return
+    root.settingVolume = true
+    root.notice = "Setting volume to " + value + "…"
+    root.post("/volume/" + value, function(status) {
+      root.settingVolume = false
+      if (status === 200) root.notice = "Volume: " + value
+      noticeTimer.restart()
+    })
+  }
+
+  function startYodel(restore) {
+    if (yodelProc.running) return
+    root.yodelLog = ""
+    root.yodelStatus = restore ? "Restoring TVs…" : "Running on all TVs…"
+    root.yodelRecoveryNeeded = false
+    root.showingYodel = true
+    yodelProc.command = [root.rokuBin, restore ? "yodel-restore" : "yodel-nuke", "--json"]
+    yodelProc.running = true
+  }
+
+  function applyYodel(text) {
+    var result
+    try { result = JSON.parse(text) } catch (e) { return }
+    root.yodelLog += result.name + ": " + result.message + "\n"
+    if (result.status === "complete") root.yodelStatus = result.message
+    if (result.status === "error" && /restoration|yodel-restore/i.test(result.message)) root.yodelRecoveryNeeded = true
   }
 
   function launch(app) {
@@ -335,6 +379,19 @@ Item {
   }
 
   Timer { interval: 5000; repeat: true; running: root.opened; onTriggered: root.refresh() }
+  // A separate process keeps restoring TVs even when the remote window is closed.
+  Process {
+    id: yodelProc
+    stdout: SplitParser { onRead: function(data) { root.applyYodel(data) } }
+    stderr: StdioCollector {
+      onStreamFinished: if (text.trim()) root.yodelLog += text.trim() + "\n"
+    }
+    onExited: function(exitCode, exitStatus) {
+      if (exitCode !== 0) root.yodelStatus = "Finished with errors; see results"
+      else if (root.yodelStatus === "Running on all TVs…" || root.yodelStatus === "Restoring TVs…") root.yodelStatus = "Finished"
+      root.refresh()
+    }
+  }
   Process {
     id: controlProc
     command: [root.rokuBin, "bridge"]
@@ -344,6 +401,7 @@ Item {
       root.bridgeReady = false
       root.bridgeQueue = []
       root.bridgePending = ({})
+      root.settingVolume = false
       if (root.opened) { root.notice = "Control connection stopped. Check Node.js 22 or newer is installed."; noticeTimer.restart() }
     }
     stdout: SplitParser { onRead: function(data) { root.applyControl(data) } }
@@ -626,6 +684,101 @@ Item {
           }
         }
         RBtn { width: Style.space(25); height: Style.space(32); cmd: "VolumeMute"; icon: root.glyph(0xF0581); fontPx: Style.space(15); hint: "Mute (m)"; onActivated: root.press("VolumeMute") }
+        Button {
+          width: Style.space(28); height: Style.space(28)
+          text: "Set"
+          enabled: !!root.ip && !yodelProc.running && !root.settingVolume
+          onClicked: { root.editingVolume = true; volumeInput.forceActiveFocus() }
+          ToolTip.visible: hovered
+          ToolTip.text: "Set exact volume (0–100)"
+        }
+      }
+
+      Rectangle {
+        z: 22
+        anchors.fill: parent
+        radius: card.radius
+        color: "#fa202024"
+        visible: root.showingYodel
+        MouseArea { anchors.fill: parent }
+        Column {
+          anchors.centerIn: parent
+          width: parent.width - root.pad * 2
+          spacing: Style.space(10)
+          Text {
+            text: "Yodel Nuke"
+            color: root.glyphColor; font.family: Style.font.family; font.bold: true
+          }
+          Text {
+            width: parent.width; wrapMode: Text.WordWrap
+            text: root.yodelStatus
+            color: "#cdb1e4"; font.family: Style.font.family
+          }
+          ScrollView {
+            width: parent.width; height: card.height * 0.55
+            clip: true
+            contentWidth: availableWidth
+            TextArea {
+              text: root.yodelLog
+              readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
+              color: root.glyphColor
+              font.family: Style.font.family; font.pixelSize: Style.space(10)
+              background: Rectangle { color: "#111114"; radius: Style.space(6) }
+            }
+          }
+          Button {
+            width: parent.width; text: "Retry restoration"
+            visible: root.yodelRecoveryNeeded
+            enabled: !yodelProc.running
+            onClicked: root.startYodel(true)
+          }
+          Button {
+            width: parent.width; text: "Close results"
+            onClicked: { root.showingYodel = false; keyCatcher.forceActiveFocus() }
+          }
+        }
+      }
+
+      Rectangle {
+        z: 21
+        anchors.fill: parent
+        radius: card.radius
+        color: "#f0202024"
+        visible: root.editingVolume
+        MouseArea { anchors.fill: parent }
+        Column {
+          anchors.centerIn: parent
+          width: parent.width - root.pad * 2
+          spacing: Style.space(12)
+          Text {
+            text: "Set volume (0–100)"
+            color: root.glyphColor; font.family: Style.font.family; font.bold: true
+          }
+          TextField {
+            id: volumeInput
+            width: parent.width
+            placeholderText: "Enter volume"
+            validator: IntValidator { bottom: 0; top: 100 }
+            inputMethodHints: Qt.ImhDigitsOnly
+            onAccepted: if (acceptableInput && !root.settingVolume) volumeSetButton.clicked()
+            Keys.onEscapePressed: { root.editingVolume = false; keyCatcher.forceActiveFocus() }
+          }
+          Button {
+            id: volumeSetButton
+            width: parent.width
+            text: "Set volume"
+            enabled: volumeInput.acceptableInput && !root.settingVolume
+            onClicked: {
+              root.setVolume(Number(volumeInput.text))
+              root.editingVolume = false
+              keyCatcher.forceActiveFocus()
+            }
+          }
+          Button {
+            width: parent.width; text: "Cancel"
+            onClicked: { root.editingVolume = false; keyCatcher.forceActiveFocus() }
+          }
+        }
       }
 
       Rectangle {
@@ -991,6 +1144,26 @@ Item {
           font.pixelSize: Style.space(10)
           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.editShortcuts() }
         }
+        Button {
+          width: parent.width
+          text: yodelProc.running ? "Yodel Nuke · running…" : "Yodel Nuke"
+          enabled: !yodelProc.running && !root.settingVolume
+          onClicked: root.startYodel(false)
+          ToolTip.visible: hovered
+          ToolTip.text: "All TVs: volume 25, YouTube for 25 seconds, then restore. Ads may count."
+        }
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          text: root.yodelStatus ? "View Yodel Nuke results" : "All TVs · 25 seconds · ads may count"
+          color: "#b6a1c8"; font.family: Style.font.family; font.pixelSize: Style.space(9)
+          MouseArea {
+            anchors.fill: parent
+            enabled: !!root.yodelStatus
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.showingYodel = true
+          }
+        }
         Text {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
@@ -1011,7 +1184,7 @@ Item {
           onLinkActivated: function(link) { Qt.openUrlExternally(link) }
           MouseArea { id: creditHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton; cursorShape: Qt.PointingHandCursor }
           ToolTip.visible: creditHover.containsMouse
-          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.6.0\nView source, installation instructions, and issues on GitHub"
+          ToolTip.text: "Made by Charles Nardella (@thediamondsaint) · v1.7.0\nView source, installation instructions, and issues on GitHub"
           ToolTip.delay: 400
         }
         Text {

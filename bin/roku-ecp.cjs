@@ -68,9 +68,13 @@ function connect(ip, timeout = 5000) {
 function translate(path) {
   let match = /^\/keypress\/(.+)$/.exec(path);
   if (match) return ['key-press', {'param-key':decodeURIComponent(match[1])}];
-  match = /^\/launch\/([^/?]+)$/.exec(path);
-  if (match) return ['launch', {'param-channel-id':match[1]}];
-  match = /^\/query\/(device-info|apps|active-app|media-player)$/.exec(path);
+  match = /^\/launch\/([^/?]+)(?:\?(.*))?$/.exec(path);
+  if (match) {
+    const params = {'param-channel-id':decodeURIComponent(match[1])};
+    if (match[2]) params['param-params'] = JSON.stringify(Object.fromEntries(new URLSearchParams(match[2])));
+    return ['launch', params];
+  }
+  match = /^\/query\/(device-info|apps|active-app|media-player|audio-device)$/.exec(path);
   if (match) return ['query-' + match[1], {}];
   throw new Error('Unsupported ECP-2 path');
 }
@@ -98,12 +102,14 @@ async function bridge() {
   async function perform(message) {
     const {ip, path} = message;
     if (isIP(ip) !== 4) throw new Error('Invalid device IP');
-    if (path === '/keypress/PowerOn') {
+    const volumeMatch = /^\/volume\/(100|[0-9]{1,2})$/.exec(path);
+    if (path === '/keypress/PowerOn' || volumeMatch) {
       const {promisify} = require('node:util');
       const {execFile} = require('node:child_process');
       const {join} = require('node:path');
-      const result = await promisify(execFile)(join(__dirname, 'roku'), ['-d', ip, 'poweron'], {timeout:50000});
-      return {status:200, transport:'power-on', message:result.stdout.trim()};
+      const args = volumeMatch ? ['volume', volumeMatch[1]] : ['poweron'];
+      const result = await promisify(execFile)(join(__dirname, 'roku'), ['-d', ip, ...args], {timeout:volumeMatch ? 120000 : 50000});
+      return {status:200, transport:volumeMatch ? 'volume' : 'power-on', message:result.stdout.trim()};
     }
     const [command, params] = translate(path);
     if (!websocketDevices.has(ip)) {
